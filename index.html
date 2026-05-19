@@ -687,12 +687,12 @@ textarea{min-height:120px;resize:vertical;}
   <div class="rules-box">
     <div class="rules-title">📖 遊び方</div>
     <ul class="rules-list">
-      <li>ホストがテーマと候補リストを作成し、URLを参加者に共有</li>
-      <li>全員がこっそり候補を1つ選んで「確定」ボタンを押す</li>
-      <li>全員完了後、ホストが1人ずつ順番に発表</li>
-      <li>同じ候補に複数人が指名した場合は封筒くじ引きで決定</li>
-      <li>外れた人は残りの候補から再指名（また競合したら再度くじ引き）</li>
-      <li>「選択終了」を選ぶと以降の巡もスキップ。全員が選択終了か全候補が獲得されたらゲーム終了！</li>
+      <li>① ホストがテーマと候補リストを作成し、URLを参加者に共有する</li>
+      <li>② 全員が候補を1つ選んで「確定」ボタンを押す（他の人には見えない）</li>
+      <li>③ 全員完了後、ホストが1人ずつ順番に発表する</li>
+      <li>④ 同じ候補に複数人が指名した場合は封筒くじ引きで決定。外れた人は残りの候補から再指名（再競合したら再度くじ引き）</li>
+      <li>⑤「選択終了」を選ぶと以降の巡はスキップされる</li>
+      <li>⑥ 全員が選択終了 or 全候補が獲得されたらゲーム終了！</li>
     </ul>
   </div>
 </div>
@@ -701,10 +701,7 @@ textarea{min-height:120px;resize:vertical;}
   <div class="card"><div class="card-title">📋 ドラフトの設定</div>
   <label>ホスト名</label><input type="text" id="create-host-name" placeholder="例：田中">
   <label>テーマ</label><input type="text" id="create-theme" placeholder="例：お惣菜ドラフト">
-  <label>候補リスト（1行に1つ）</label><textarea id="create-candidates" placeholder="例：からあげ
-　　野菜炒め
-　　みそしる
-　　コロッケ"></textarea>
+  <label>候補リスト（1行に1つ）</label><textarea id="create-candidates" placeholder="例：からあげ　　野菜炒め　　みそしる　　コロッケ"></textarea>
   <button class="btn btn-primary" onclick="createRoom()">🎯 ルームを作成する</button>
   <button class="btn btn-outline" onclick="showScreen('screen-top')">← 戻る</button></div>
 </div>
