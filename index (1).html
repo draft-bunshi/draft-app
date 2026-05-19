@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ドラフト会議</title>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getDatabase, ref, set, get, onValue, update } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+  const firebaseConfig = {
+    apiKey: "AIzaSyBgRYf6s6_w2c6PNFf-3_AEnJTNtdjgvuw",
+    authDomain: "draft-app-b2480.firebaseapp.com",
+    databaseURL: "https://draft-app-b2480-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "draft-app-b2480",
+    storageBucket: "draft-app-b2480.firebasestorage.app",
+    messagingSenderId: "905518962263",
+    appId: "1:905518962263:web:8426b5d0fe07bf0266b512"
+  };
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+  let roomId=null,myPlayerId=null,myPlayerName=null,isHost=false,roomData=null,unsubscribe=null;
+
+  function generateId(len=6){return Math.random().toString(36).substring(2,2+len).toUpperCase();}
+  function getRoomRef(path=''){return ref(db,'rooms/'+roomId+path);}
+  function savePlayerId(pid){sessionStorage.setItem('draft_pid_'+roomId,pid);}
+  function loadPlayerId(){return sessionStorage.getItem('draft_pid_'+roomId);}
+  function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');}
+  window.showScreen=showScreen;
+  function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+  function escA(s){return String(s||'').replace(/'/g,"\\'");}
+
+  window.goCreate=function(){showScreen('screen-create');};
+  window.goJoin=function(){const p=new URLSearchParams(window.location.search);const r=p.get('room');if(r)document.getElementById('join-room-id').value=r;showScreen('screen-join');};
+
+  window.createRoom=async function(){
+    const theme=document.getElementById('create-theme').value.trim();
+    const cRaw=document.getElementById('create-candidates').value.trim();
+    const hName=document.getElementById('create-host-name').value.trim();
+    const rounds=parseInt(document.getElementById('create-rounds').value)||3;
+    if(!theme||!cRaw||!hName){alert('全て入力してください');return;}
+    const candidates=cRaw.split('\n').map(s=>s.trim()).filter(Boolean);
+    if(candidates.length<2){alert('候補を2つ以上入力してください');return;}
+    roomId=generateId(6);myPlayerId=generateId(8);myPlayerName=hName;isHost=true;savePlayerId(myPlayerId);
+    await set(getRoomRef(),{theme,candidates,rounds,currentRound:1,phase:'lobby',players:{[myPlayerId]:{name:hName,isHost:true,joinedAt:Date.now()}},picks:{},results:{},createdAt:Date.now()});
+    startListening();showScreen('screen-lobby');updateShareUrl();
+  };
+
+  window.joinRoom=async function(){
+    const rid=document.getElementById('join-room-id').value.trim().toUpperCase();
+    const name=document.getElementById('join-name').value.trim();
+    if(!rid||!name){alert('ルームIDと名前を入力してください');return;}
+    roomId=rid;
+    const snap=await get(ref(db,'rooms/'+roomId));
+    if(!snap.exists()){alert('ルームが見つかりません');return;}
+    const data=snap.val();
+    let pid=loadPlayerId();
+    if(pid&&data.players&&data.players[pid]){myPlayerId=pid;myPlayerName=data.players[pid].name;isHost=data.players[pid].isHost||false;}
+    else if(data.phase==='lobby'){myPlayerId=generateId(8);myPlayerName=name;isHost=false;savePlayerId(myPlayerId);await update(ref(db,'rooms/'+roomId+'/players/'+myPlayerId),{name,isHost:false,joinedAt:Date.now()});}
+    else{alert('ゲームが既に始まっています');return;}
+    startListening();showScreen('screen-lobby');updateShareUrl();
+  };
+
+  function updateShareUrl(){const url=location.origin+location.pathname+'?room='+roomId;const el=document.getElementById('share-url');if(el)el.textContent=url;}
+  window.copyShareUrl=function(){const url=location.origin+location.pathname+'?room='+roomId;navigator.clipboard.writeText(url).then(()=>{const b=document.getElementById('copy-btn');b.textContent='コピーしました！';setTimeout(()=>b.textContent='URLをコピー',2000);});};
+
+  function startListening(){
+    if(unsubscribe)unsubscribe();
+    unsubscribe=onValue(getRoomRef(),snap=>{if(!snap.exists())return;roomData=snap.val();renderCurrentState();});
+  }
+
+  function renderCurrentState(){
+    if(!roomData)return;
+    const p=roomData.phase;
+    if(p==='lobby')renderLobby();
+    else if(p==='picking')renderPicking();
+    else if(p==='revealing')renderRevealing();
+    else if(p==='round_summary')renderRoundSummary();
+    else if(p==='lottery_pick')renderLotteryPick();
+    else if(p==='done')renderDone();
+  }
+
+  // ===== ロビー =====
+  function renderLobby(){
+    showScreen('screen-lobby');
+    document.getElementById('lobby-theme').textContent=roomData.theme;
+    document.getElementById('lobby-room-id').textContent=roomId;
+    updateShareUrl();
+    const pl=roomData.players||{};
+    document.getElementById('lobby-players').innerHTML=Object.values(pl).sort((a,b)=>a.joinedAt-b.joinedAt).map(p=>'<li>'+(p.isHost?'👑 ':'')+esc(p.name)+'</li>').join('');
+    const sb=document.getElementById('start-btn');
+    if(sb)sb.style.display=isHost?'block':'none';
+  }
+  window.startGame=async function(){
+    const pl=roomData.players||{};
+    if(!Object.keys(pl).length){alert('参加者が必要です');return;}
+    const order=Object.keys(pl).sort((a,b)=>pl[a].joinedAt-pl[b].joinedAt);
+    await update(getRoomRef(),{phase:'picking',playerOrder:order,currentRound:1,picks:{},results:{},retryPlayers:null,revealQueue:null});
+  };
+
+  // ===== 指名 =====
+  function getUsed(){
+    const used=new Set();
+    const r=roomData.results||{};
+    for(const rnd of Object.values(r))for(const item of Object.values(rnd))if(item.winner)used.add(item.candidate);
+    return used;
+  }
+
+  window.showPlayerHistory=function(pid){
+    const pl=roomData.players||{};const p=pl[pid];if(!p)return;
+    const allResults=roomData.results||{};
+    const lines=[];
+    for(const[rnd,rr]of Object.entries(allResults)){
+      for(const[rpid,item]of Object.entries(rr)){
+        if(rpid===pid&&item.winner===pid)lines.push('第'+rnd+'巡：'+item.candidate);
+      }
+    }
+    alert(p.name+'の獲得履歴\n\n'+(lines.length>0?lines.join('\n'):'まだ獲得なし'));
+  };
+
+  function renderPicking(){
+    showScreen('screen-picking');
+    const round=roomData.currentRound;
+    document.getElementById('pick-theme').textContent=roomData.theme;
+    document.getElementById('pick-round').textContent='第'+round+'巡目';
+    document.getElementById('pick-rounds-total').textContent='（全'+roomData.rounds+'巡）';
+    const myPick=(roomData.picks||{})[round]?.[myPlayerId];
+    const pl=roomData.players||{};
+    const picks=(roomData.picks||{})[round]||{};
+    const order=roomData.playerOrder||Object.keys(pl);
+    const retryPlayers=roomData.retryPlayers||null;
+    const isRetry=retryPlayers&&retryPlayers.length>0;
+    const activeOrder=isRetry?order.filter(pid=>retryPlayers.includes(pid)):order;
+
+    // 指名状況
+    document.getElementById('pick-wait-list').innerHTML=activeOrder.map(pid=>{
+      const p=pl[pid];const done=picks[pid]!==undefined;const isMe=pid===myPlayerId;
+      return '<li class="'+(done?'done':'waiting')+'"><span class="player-name-btn'+(isMe?' me':'')+'" onclick="showPlayerHistory(\''+pid+'\')">'+esc(p.name)+'</span> '+(done?'✅':'⏳')+'</li>';
+    }).join('');
+
+    const allDone=activeOrder.every(pid=>picks[pid]!==undefined);
+    const rb=document.getElementById('start-reveal-btn');
+    if(rb)rb.style.display=(isHost&&allDone&&!isRetry)?'block':'none';
+    // 再指名で全員完了したら自動で発表へ
+    if(isRetry&&allDone&&isHost){setTimeout(()=>startRetryReveal(),500);}
+
+    const myTurn=!isRetry||retryPlayers.includes(myPlayerId);
+    const candSection=document.getElementById('cand-section');
+    if(candSection)candSection.style.display=myTurn?'block':'none';
+
+    if(myTurn){
+      const used=getUsed();
+      const cands=(roomData.candidates||[]).filter(c=>!used.has(c));
+      document.getElementById('pick-candidates').innerHTML=cands.map(c=>'<li><button class="cand-btn '+(myPick===c?'selected':'')+'" onclick="selectCandidate(\''+escA(c)+'\')">'+esc(c)+'</button></li>').join('');
+    }
+    document.getElementById('pick-my-pick').textContent=myTurn?(myPick?'今巡の指名：'+myPick:'候補をタップして指名してください'):'今巡はあなたの指名はありません（待機中）';
+
+    // 過去の獲得履歴
+    const allResults=roomData.results||{};
+    const historyLines=[];
+    for(const[rnd,rr]of Object.entries(allResults)){
+      for(const[rpid,item]of Object.entries(rr)){
+        if(rpid===myPlayerId&&item.winner===myPlayerId)historyLines.push('第'+rnd+'巡：'+item.candidate);
+      }
+    }
+    const histEl=document.getElementById('pick-history');
+    if(histEl){
+      if(historyLines.length>0){histEl.style.display='block';histEl.innerHTML='<div class="history-title">🏆 あなたのこれまでの獲得</div>'+historyLines.map(l=>'<div class="history-item">'+esc(l)+'</div>').join('');}
+      else histEl.style.display='none';
+    }
+    // 待機中の人には誰が再指名対象かを表示
+    const retryNotice=document.getElementById('retry-notice');
+    if(retryNotice){
+      if(isRetry&&!myTurn){
+        const retryNames=retryPlayers.map(pid=>pl[pid]?.name||pid).join('、');
+        retryNotice.style.display='block';
+        retryNotice.textContent='再指名中：'+retryNames;
+      } else retryNotice.style.display='none';
+    }
+  }
+
+  window.selectCandidate=async function(c){
+    await set(ref(db,'rooms/'+roomId+'/picks/'+roomData.currentRound+'/'+myPlayerId),c);
+  };
+
+  // 通常の発表開始
+  window.startReveal=async function(){
+    const round=roomData.currentRound;
+    const pl=roomData.players||{};
+    const order=roomData.playerOrder||[];
+    // revealQueue: 発表する人の順番リスト
+    const queue=order.map(pid=>({pid,isRetry:false}));
+    await update(getRoomRef(),{phase:'revealing',revealQueue:queue,revealQueueIndex:0,revealShown:{}});
+  };
+
+  // 再指名後の発表開始
+  async function startRetryReveal(){
+    const retryPlayers=roomData.retryPlayers||[];
+    const queue=retryPlayers.map(pid=>({pid,isRetry:true}));
+    await update(getRoomRef(),{phase:'revealing',revealQueue:queue,revealQueueIndex:0,revealShown:{}});
+  }
+
+  // ===== 発表 =====
+  function renderRevealing(){
+    showScreen('screen-revealing');
+    const round=roomData.currentRound;
+    const picks=(roomData.picks||{})[round]||{};
+    const pl=roomData.players||{};
+    const order=roomData.playerOrder||[];
+    const queue=roomData.revealQueue||[];
+    const qIdx=roomData.revealQueueIndex||0;
+    const subStep=(roomData.revealSubStep||0); // 0=個人発表, 1=全体サマリー
+
+    document.getElementById('reveal-theme').textContent=roomData.theme;
+
+    const nextBtn=document.getElementById('next-reveal-btn');
+    const judgeBtn=document.getElementById('judge-btn');
+    const showBtn=document.getElementById('reveal-show-btn');
+    if(nextBtn)nextBtn.style.display='none';
+    if(judgeBtn)judgeBtn.style.display='none';
+    if(showBtn)showBtn.style.display='none';
+
+    if(qIdx>=queue.length){
+      // 全員発表完了 → 競合チェックへ
+      document.getElementById('reveal-big').style.display='none';
+      document.getElementById('reveal-summary').style.display='none';
+      document.getElementById('reveal-done-msg').style.display='block';
+      document.getElementById('reveal-big-round').textContent='';
+      if(judgeBtn)judgeBtn.style.display=isHost?'block':'none';
+      return;
+    }
+
+    const {pid} = queue[qIdx];
+    const p=pl[pid];
+    const pick=picks[pid]||'（指名なし）';
+
+    if(subStep===0){
+      // 個人発表：どでかく
+      document.getElementById('reveal-big').style.display='flex';
+      document.getElementById('reveal-summary').style.display='none';
+      document.getElementById('reveal-done-msg').style.display='none';
+      document.getElementById('reveal-big-name').textContent=p?.name||'';
+      document.getElementById('reveal-big-pick').textContent='';
+      document.getElementById('reveal-big-round').textContent='第'+round+'巡　指名発表';
+      const shown=(roomData.revealShown||{})[qIdx];
+      if(shown){
+        document.getElementById('reveal-big-pick').textContent=pick;
+        if(nextBtn)nextBtn.style.display=isHost?'block':'none';
+      } else {
+        if(showBtn)showBtn.style.display=isHost?'block':'none';
+      }
+    } else {
+      // サマリー：全員名前表示、発表済みは選択内容、未発表は—
+      document.getElementById('reveal-big').style.display='none';
+      document.getElementById('reveal-summary').style.display='block';
+      document.getElementById('reveal-done-msg').style.display='none';
+      const isRetryReveal=queue[0]?.isRetry||false;
+      document.getElementById('reveal-summary-title').textContent=isRetryReveal?'第'+round+'巡　再指名の結果':'第'+round+'巡　ここまでの結果';
+
+      // 全員分表示（発表済みのみ内容、それ以外は—）
+      const revealedPids=new Set(queue.slice(0,qIdx+1).map(q=>q.pid));
+      let html='';
+      for(const pid2 of order){
+        const p2=pl[pid2];
+        const isRevealed=revealedPids.has(pid2);
+        const pick2=isRevealed?(picks[pid2]||'（指名なし）'):'—';
+        html+='<div class="summary-row'+(isRevealed?'':' not-yet')+'"><span class="summary-name">'+esc(p2?.name||'')+'</span><span class="summary-pick">'+esc(pick2)+'</span></div>';
+      }
+      document.getElementById('reveal-summary-list').innerHTML=html;
+      if(nextBtn)nextBtn.style.display=isHost?'block':'none';
+    }
+  }
+
+  window.revealShowPick=async function(){
+    await update(getRoomRef(),{['revealShown/'+(roomData.revealQueueIndex||0)]:true});
+  };
+
+  window.nextReveal=async function(){
+    const subStep=roomData.revealSubStep||0;
+    if(subStep===0){
+      // 個人発表 → サマリーへ
+      await update(getRoomRef(),{revealSubStep:1});
+    } else {
+      // サマリー → 次の人の個人発表へ
+      const newIdx=(roomData.revealQueueIndex||0)+1;
+      await update(getRoomRef(),{revealQueueIndex:newIdx,revealSubStep:0});
+    }
+  };
+
+  // ===== 競合チェック =====
+  window.judgeRound=async function(){
+    const round=roomData.currentRound;
+    const picks=(roomData.picks||{})[round]||{};
+    const retryPlayers=roomData.retryPlayers||null;
+    const isRetry=retryPlayers&&retryPlayers.length>0;
+    const targetPicks=isRetry?Object.fromEntries(Object.entries(picks).filter(([pid])=>retryPlayers.includes(pid))):picks;
+
+    const candMap={};
+    for(const[pid,cand]of Object.entries(targetPicks)){if(!candMap[cand])candMap[cand]=[];candMap[cand].push(pid);}
+
+    const singles={};const conflictGroups=[];
+    for(const[cand,pids]of Object.entries(candMap)){
+      if(pids.length===1)singles[pids[0]]={candidate:cand,winner:pids[0],competed:false};
+      else conflictGroups.push({candidate:cand,pids});
+    }
+
+    const currentResults={...(roomData.results?.[round]||{}),...singles};
+    await update(getRoomRef(),{['results/'+round]:currentResults});
+
+    if(conflictGroups.length===0){
+      // 競合なし → 巡サマリーへ
+      await update(getRoomRef(),{phase:'round_summary',retryPlayers:null,roundSummaryRound:round});
+    } else {
+      // 競合あり → 封筒くじ引きへ
+      const allConflict=[...new Set(conflictGroups.flatMap(g=>g.pids))];
+      const shuffled=[...allConflict].sort(()=>Math.random()-0.5);
+      const lotteryGroups=conflictGroups.map(g=>{
+        const winnerIdx=Math.floor(Math.random()*g.pids.length);
+        const envelopes=[...g.pids.map((pid,i)=>({pid,isWinner:i===winnerIdx}))].sort(()=>Math.random()-0.5);
+        return{candidate:g.candidate,pids:g.pids,envelopes,chosen:{},winner:g.pids[winnerIdx]};
+      });
+      await update(getRoomRef(),{phase:'lottery_pick',lotteryGroups,lotteryPickOrder:shuffled,lotteryPickIndex:0,lotteryRevealed:false});
+    }
+  };
+
+  // ===== 巡サマリー =====
+  function renderRoundSummary(){
+    showScreen('screen-round-summary');
+    const round=roomData.roundSummaryRound||roomData.currentRound;
+    const pl=roomData.players||{};
+    const order=roomData.playerOrder||[];
+    const results=roomData.results||{};
+    const roundResults=results[round]||{};
+
+    document.getElementById('rs-title').textContent='第'+round+'巡　確定結果';
+
+    // その巡の獲得者だけ表示
+    let html='';
+    for(const pid of order){
+      const p=pl[pid];
+      const item=roundResults[pid];
+      const won=item&&item.winner===pid;
+      html+='<div class="rs-row'+(won?'':' rs-pending')+'"><span class="rs-name">'+esc(p?.name||'')+'</span><span class="rs-pick">'+(won?esc(item.candidate):'—')+'</span></div>';
+    }
+    document.getElementById('rs-list').innerHTML=html;
+
+    const nextBtn=document.getElementById('rs-next-btn');
+    if(nextBtn)nextBtn.style.display=isHost?'block':'none';
+  }
+
+  window.roundSummaryNext=async function(){
+    const round=roomData.roundSummaryRound||roomData.currentRound;
+    await advanceRound(round);
+  };
+
+  // ===== 封筒くじ引き =====
+  function renderLotteryPick(){
+    showScreen('screen-lottery-pick');
+    const pl=roomData.players||{};
+    const groups=roomData.lotteryGroups||[];
+    const pickOrder=roomData.lotteryPickOrder||[];
+    const pickIndex=roomData.lotteryPickIndex||0;
+    const revealed=roomData.lotteryRevealed||false;
+
+    const candNames=groups.map(g=>g.candidate).join('・');
+    document.getElementById('lp-title').textContent='「'+candNames+'」競合！封筒くじ引き';
+
+    const allChosen=groups.every(g=>Object.keys(g.chosen||{}).length===g.pids.length);
+
+    if(revealed){renderEnvelopeResult(groups,pl);return;}
+
+    if(allChosen){
+      document.getElementById('lp-envelopes').innerHTML='<div class="lp-all-chosen">全員が封筒を選びました！</div>';
+      document.getElementById('lp-status').textContent='封筒を開封してください';
+      const rb=document.getElementById('lp-reveal-btn');
+      if(rb)rb.style.display=isHost?'block':'none';
+      document.getElementById('lp-next-btn').style.display='none';
+      return;
+    }
+
+    const currentPid=pickOrder[pickIndex];
+    const currentPlayer=pl[currentPid];
+    const isMyTurn=currentPid===myPlayerId;
+    document.getElementById('lp-status').textContent=isMyTurn?'あなたが封筒を選ぶ番です！':(currentPlayer?.name||'?')+'が選んでいます...';
+    document.getElementById('lp-reveal-btn').style.display='none';
+    document.getElementById('lp-next-btn').style.display='none';
+
+    let html='';
+    for(const group of groups){
+      const chosen=group.chosen||{};
+      const alreadyChosen=chosen[currentPid]!==undefined;
+      html+='<div class="lp-group"><div class="lp-group-cand">「'+esc(group.candidate)+'」の封筒</div><div class="lp-envelopes-row">';
+      for(let i=0;i<group.envelopes.length;i++){
+        const takenBy=Object.entries(chosen).find(([,v])=>Number(v)===i);
+        const isTaken=!!takenBy;const isMyChoice=takenBy&&takenBy[0]===myPlayerId;
+        if(isTaken){html+='<div class="envelope taken'+(isMyChoice?' mine':'')+'"><div class="env-icon">✉️</div><div class="env-label">'+(isMyChoice?'あなた':esc(pl[takenBy[0]]?.name||'?'))+'</div></div>';}
+        else if(isMyTurn&&!alreadyChosen){html+='<div class="envelope pickable" onclick="pickEnvelope(\''+escA(group.candidate)+'\','+i+')"><div class="env-icon">✉️</div><div class="env-label">選ぶ</div></div>';}
+        else{html+='<div class="envelope waiting"><div class="env-icon">✉️</div><div class="env-label">-</div></div>';}
+      }
+      html+='</div></div>';
+    }
+    document.getElementById('lp-envelopes').innerHTML=html;
+  }
+
+  window.pickEnvelope=async function(candidate,envIdx){
+    const groups=roomData.lotteryGroups||[];
+    const pickOrder=roomData.lotteryPickOrder||[];
+    const pickIndex=roomData.lotteryPickIndex||0;
+    if(pickOrder[pickIndex]!==myPlayerId)return;
+    const groupIdx=groups.findIndex(g=>g.candidate===candidate);if(groupIdx<0)return;
+    const updates={['lotteryGroups/'+groupIdx+'/chosen/'+myPlayerId]:envIdx};
+    const newGroups=groups.map((g,i)=>i===groupIdx?{...g,chosen:{...(g.chosen||{}),[myPlayerId]:envIdx}}:g);
+    const myDone=newGroups.every(g=>g.chosen&&g.chosen[myPlayerId]!==undefined);
+    if(myDone)updates['lotteryPickIndex']=pickIndex+1;
+    await update(getRoomRef(),updates);
+  };
+
+  function renderEnvelopeResult(groups,pl){
+    let html='<div class="lp-result-title">開封！</div>';
+    for(const group of groups){
+      const chosen=group.chosen||{};const envelopes=group.envelopes||[];
+      html+='<div class="lp-result-group"><div class="lp-group-cand">「'+esc(group.candidate)+'」</div><div class="lp-envelopes-row">';
+      for(let i=0;i<envelopes.length;i++){const env=envelopes[i];const takenBy=Object.entries(chosen).find(([,v])=>Number(v)===i);const playerName=takenBy?esc(pl[takenBy[0]]?.name||'?'):'?';html+='<div class="envelope revealed '+(env.isWinner?'winner':'loser')+'"><div class="env-icon">'+(env.isWinner?'🎉':'💨')+'</div><div class="env-label">'+playerName+'</div></div>';}
+      html+='</div><div class="lp-winner-announce">🏆 '+esc(pl[group.winner]?.name||'?')+' が「'+esc(group.candidate)+'」を獲得！</div>';
+      const losers=group.pids.filter(p=>p!==group.winner).map(p=>pl[p]?.name||p);
+      if(losers.length)html+='<div class="lp-losers">外れ：'+losers.map(esc).join('、')+' → 再指名へ</div>';
+      html+='</div>';
+    }
+    document.getElementById('lp-envelopes').innerHTML=html;
+    document.getElementById('lp-status').textContent='';
+    document.getElementById('lp-reveal-btn').style.display='none';
+    document.getElementById('lp-next-btn').style.display=isHost?'block':'none';
+  }
+
+  window.revealEnvelopes=async function(){await update(getRoomRef(),{lotteryRevealed:true});};
+
+  window.lotteryPickNext=async function(){
+    const round=roomData.currentRound;
+    const groups=roomData.lotteryGroups||[];
+    const roundResults={...(roomData.results?.[round]||{})};
+    const retryList=[];
+    for(const group of groups){
+      const winner=group.winner;
+      for(const pid of group.pids)roundResults[pid]={candidate:group.candidate,winner,competed:true};
+      retryList.push(...group.pids.filter(p=>p!==winner));
+    }
+    await update(getRoomRef(),{['results/'+round]:roundResults});
+
+    if(retryList.length>0){
+      // 外れた人の picks をクリアして再指名発表へ
+      const clearUpdates={};
+      for(const pid of retryList)clearUpdates['picks/'+round+'/'+pid]=null;
+      await update(getRoomRef(),clearUpdates);
+      // 再指名者を revealQueue にして発表フェーズへ（どでかく表示）
+      const queue=retryList.map(pid=>({pid,isRetry:true}));
+      await update(getRoomRef(),{phase:'revealing',revealQueue:queue,revealQueueIndex:0,revealSubStep:0,revealShown:{},retryPlayers:retryList,lotteryGroups:null,lotteryRevealed:false});
+    } else {
+      // 全員確定 → 巡サマリーへ
+      await update(getRoomRef(),{phase:'round_summary',retryPlayers:null,roundSummaryRound:round,lotteryGroups:null,lotteryRevealed:false});
+    }
+  };
+
+  async function advanceRound(round){
+    const rounds=roomData.rounds;
+    if(round>=rounds){await update(getRoomRef(),{phase:'done',retryPlayers:null});}
+    else{const next=round+1;await update(getRoomRef(),{phase:'picking',currentRound:next,retryPlayers:null,revealQueue:null,revealShown:{},['picks/'+next]:{}});}
+  }
+
+  // ===== 最終結果 =====
+  function renderDone(){
+    showScreen('screen-done');
+    const pl=roomData.players||{};const results=roomData.results||{};const order=roomData.playerOrder||[];
+    document.getElementById('done-theme').textContent=roomData.theme;
+    const pd={};for(const pid of order)pd[pid]=[];
+    for(const[round,rr]of Object.entries(results)){
+      for(const[pid,item]of Object.entries(rr)){if(item.winner===pid)pd[pid]&&pd[pid].push({round:parseInt(round),candidate:item.candidate});}
+    }
+    let html='';
+    for(const pid of order){const p=pl[pid];const drafts=pd[pid]||[];html+='<div class="result-card '+(pid===myPlayerId?'my-card':'')+'"><div class="result-name">'+(p.isHost?'👑 ':'')+esc(p.name)+'</div><ul class="result-picks">'+(drafts.sort((a,b)=>a.round-b.round).map(d=>'<li>第'+d.round+'巡：'+esc(d.candidate)+'</li>').join('')||'<li>獲得なし</li>')+'</ul></div>';}
+    document.getElementById('done-results').innerHTML=html;
+  }
+
+  window.addEventListener('load',()=>{
+    const p=new URLSearchParams(window.location.search);const rid=p.get('room');
+    if(rid){roomId=rid;const saved=loadPlayerId();if(saved){get(ref(db,'rooms/'+roomId)).then(snap=>{if(snap.exists()){const data=snap.val();if(data.players&&data.players[saved]){myPlayerId=saved;myPlayerName=data.players[saved].name;isHost=data.players[saved].isHost||false;startListening();return;}}showScreen('screen-join');document.getElementById('join-room-id').value=rid;});}else{showScreen('screen-join');document.getElementById('join-room-id').value=rid;}}
+  });
+</script>
+<style>
+:root{--ink:#1a1208;--paper:#f5efe0;--paper2:#ede3cc;--red:#c0392b;--gold:#b8860b;--accent:#2c5f8a;--border:#8b7355;--shadow:rgba(26,18,8,0.18);--font-serif:'Noto Serif JP',serif;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--paper);color:var(--ink);font-family:var(--font-serif);min-height:100vh;}
+.screen{display:none;max-width:680px;margin:0 auto;padding:24px 16px 60px;}
+.screen.active{display:block;}
+.banner{text-align:center;padding:20px 0 16px;border-bottom:3px double var(--border);margin-bottom:28px;}
+.banner-title{font-size:2rem;font-weight:900;letter-spacing:.15em;color:var(--red);}
+.banner-sub{font-size:.85rem;color:var(--border);margin-top:4px;}
+.card{background:#fff8ee;border:1.5px solid var(--border);border-radius:4px;padding:20px;margin-bottom:18px;box-shadow:3px 3px 0 var(--shadow);}
+.card-title{font-size:1rem;font-weight:700;color:var(--red);margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--paper2);}
+label{display:block;font-size:.82rem;color:var(--border);margin-bottom:4px;}
+input[type=text],input[type=number],textarea{width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:3px;background:var(--paper);font-family:var(--font-serif);font-size:1rem;color:var(--ink);margin-bottom:14px;outline:none;}
+textarea{min-height:120px;resize:vertical;}
+.btn{display:block;width:100%;padding:14px;border:none;border-radius:3px;font-family:var(--font-serif);font-size:1.05rem;font-weight:700;cursor:pointer;margin-bottom:10px;}
+.btn-primary{background:var(--red);color:#fff;box-shadow:3px 3px 0 #7a1e14;}
+.btn-secondary{background:var(--accent);color:#fff;box-shadow:3px 3px 0 #1a3d5c;}
+.btn-outline{background:transparent;color:var(--ink);border:1.5px solid var(--border);box-shadow:2px 2px 0 var(--shadow);}
+.btn-gold{background:var(--gold);color:#fff;box-shadow:3px 3px 0 #7a5a00;}
+.btn-reveal{background:#1a1208;color:#f5efe0;box-shadow:3px 3px 0 #000;font-size:1.2rem;padding:18px;}
+#screen-top .logo{text-align:center;padding:32px 0 24px;}
+.logo-main{font-size:2.6rem;font-weight:900;color:var(--red);letter-spacing:.2em;display:block;}
+.logo-en{font-size:.75rem;color:var(--border);letter-spacing:.3em;margin-top:6px;}
+.rules-box{background:#fff8ee;border:1.5px solid var(--border);border-radius:4px;padding:18px 20px;margin-top:8px;}
+.rules-title{font-size:.85rem;font-weight:700;color:var(--border);margin-bottom:10px;}
+.rules-list{list-style:none;padding:0;}
+.rules-list li{font-size:.88rem;padding:6px 0;border-bottom:1px dotted var(--paper2);line-height:1.6;}
+.rules-list li:last-child{border-bottom:none;}
+.rules-list li::before{content:'▶ ';color:var(--red);font-size:.7rem;}
+.room-id-badge{display:inline-block;background:var(--ink);color:var(--paper);font-size:1.4rem;font-weight:900;letter-spacing:.3em;padding:6px 18px;border-radius:2px;margin-bottom:12px;}
+.share-url-box{background:var(--paper2);border:1px dashed var(--border);border-radius:3px;padding:10px 12px;font-size:.78rem;word-break:break-all;margin-bottom:10px;color:var(--accent);}
+.player-list,.wait-list{list-style:none;padding:0;}
+.player-list li,.wait-list li{padding:8px 12px;border-bottom:1px solid var(--paper2);font-size:.95rem;display:flex;align-items:center;gap:8px;}
+.wait-list li.done{color:#27ae60;}.wait-list li.waiting{color:var(--border);}
+.player-name-btn{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;}
+.player-name-btn.me{font-weight:700;color:var(--red);}
+.cand-list{list-style:none;padding:0;}.cand-list li{margin-bottom:8px;}
+.cand-btn{width:100%;padding:12px 16px;background:var(--paper);border:1.5px solid var(--border);border-radius:3px;font-family:var(--font-serif);font-size:1rem;text-align:left;cursor:pointer;}
+.cand-btn.selected{background:var(--red);color:#fff;border-color:var(--red);font-weight:700;}
+.my-pick-display{background:var(--paper2);border-left:4px solid var(--red);padding:10px 14px;margin:14px 0;font-weight:700;}
+.history-box{background:#fff8ee;border:1px solid var(--border);border-radius:4px;padding:14px;margin-bottom:14px;display:none;}
+.history-title{font-size:.82rem;color:var(--border);font-weight:700;margin-bottom:8px;}
+.history-item{font-size:.95rem;padding:4px 0;border-bottom:1px dotted var(--paper2);}
+.retry-notice{background:#fff3cd;border:1.5px solid var(--gold);border-radius:4px;padding:10px 14px;margin-bottom:14px;font-size:.9rem;font-weight:700;color:var(--gold);display:none;}
+#screen-revealing{max-width:100%;padding:0;}
+.reveal-header{text-align:center;padding:16px;background:var(--ink);color:var(--paper);}
+.reveal-header-theme{font-size:1rem;opacity:.7;}
+.reveal-header-round{font-size:1.2rem;font-weight:900;letter-spacing:.1em;}
+#reveal-big{display:none;flex-direction:column;align-items:center;justify-content:center;min-height:70vh;padding:24px;text-align:center;background:var(--paper);}
+.reveal-big-label{font-size:.9rem;color:var(--border);letter-spacing:.15em;margin-bottom:16px;}
+.reveal-big-name{font-size:3rem;font-weight:900;color:var(--ink);letter-spacing:.1em;margin-bottom:32px;line-height:1.2;}
+.reveal-big-pick-wrap{min-height:100px;display:flex;align-items:center;justify-content:center;}
+.reveal-big-pick{font-size:3.5rem;font-weight:900;color:var(--red);letter-spacing:.08em;animation:popIn .4s ease;}
+@keyframes popIn{from{transform:scale(0.5);opacity:0;}to{transform:scale(1);opacity:1;}}
+.reveal-btns{padding:20px 24px;max-width:680px;margin:0 auto;}
+#reveal-summary{display:none;padding:24px;max-width:680px;margin:0 auto;}
+.summary-title{font-size:1.2rem;font-weight:900;color:var(--red);margin-bottom:16px;text-align:center;border-bottom:2px solid var(--border);padding-bottom:10px;}
+.summary-row{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--paper2);font-size:1rem;}
+.summary-row.not-yet{opacity:.45;}
+.summary-name{font-weight:700;}.summary-pick{color:var(--red);font-weight:700;}
+.summary-row.not-yet .summary-pick{color:var(--border);font-weight:400;}
+#reveal-done-msg{display:none;text-align:center;padding:40px 24px;font-size:1.1rem;font-weight:700;}
+#screen-round-summary{max-width:680px;margin:0 auto;padding:24px 16px 60px;}
+.rs-header{text-align:center;padding:20px 0 16px;border-bottom:3px double var(--border);margin-bottom:28px;}
+.rs-title-text{font-size:1.8rem;font-weight:900;color:var(--red);letter-spacing:.1em;}
+.rs-row{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--paper2);font-size:1.05rem;}
+.rs-row.rs-pending{opacity:.4;}
+.rs-name{font-weight:700;}
+.rs-pick{color:var(--red);font-weight:700;font-size:1.1rem;}
+#screen-lottery-pick{background:var(--paper);}
+.lp-header{text-align:center;background:var(--ink);color:var(--paper);padding:16px 20px;font-size:1.1rem;font-weight:900;}
+#lp-status{text-align:center;font-size:1rem;font-weight:700;padding:14px;color:var(--red);min-height:48px;}
+.lp-group{margin-bottom:24px;}
+.lp-group-cand{text-align:center;font-size:.9rem;color:var(--border);margin-bottom:10px;font-weight:700;}
+.lp-envelopes-row{display:flex;justify-content:center;gap:16px;flex-wrap:wrap;}
+.envelope{width:80px;height:100px;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;transition:transform .15s;}
+.envelope .env-icon{font-size:2.2rem;}
+.envelope .env-label{font-size:.72rem;font-weight:700;text-align:center;}
+.envelope.pickable{background:#fff8ee;border:2px solid var(--gold);cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.15);}
+.envelope.pickable:hover{transform:translateY(-6px);}
+.envelope.taken{background:var(--paper2);border:2px solid var(--border);}
+.envelope.taken.mine{border-color:var(--red);background:#ffe8e8;}
+.envelope.waiting{background:var(--paper2);border:2px dashed var(--border);opacity:.5;}
+.envelope.revealed.winner{background:#fff3cd;border:3px solid var(--gold);transform:scale(1.1);}
+.envelope.revealed.loser{background:var(--paper2);border:2px solid var(--border);opacity:.7;}
+.lp-all-chosen{text-align:center;font-size:1.1rem;font-weight:700;color:var(--accent);padding:20px;}
+.lp-result-title{text-align:center;font-size:1.4rem;font-weight:900;color:var(--red);padding:16px;border-bottom:2px solid var(--border);margin-bottom:20px;}
+.lp-result-group{margin-bottom:24px;}
+.lp-winner-announce{text-align:center;font-size:1.1rem;font-weight:700;color:var(--red);margin:12px 0 4px;}
+.lp-losers{text-align:center;font-size:.85rem;color:var(--border);}
+.results-grid{display:grid;gap:16px;}
+.result-card{background:#fff8ee;border:1.5px solid var(--border);border-radius:4px;padding:16px;box-shadow:2px 2px 0 var(--shadow);}
+.result-card.my-card{border-color:var(--red);}
+.result-name{font-size:1.1rem;font-weight:900;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--paper2);color:var(--red);}
+.result-picks{list-style:none;padding:0;}.result-picks li{padding:6px 0;border-bottom:1px dotted var(--paper2);}
+.phase-badge{display:inline-block;background:var(--red);color:#fff;font-size:.75rem;font-weight:700;padding:3px 10px;border-radius:2px;margin-bottom:10px;}
+.text-center{text-align:center;}.mt-8{margin-top:8px;}.mt-16{margin-top:16px;}.small{font-size:.82rem;color:var(--border);}
+</style>
+</head>
+<body>
+<div id="screen-top" class="screen active">
+  <div class="logo"><span class="logo-main">ドラフト会議</span><div class="logo-en">DRAFT CONFERENCE</div></div>
+  <div class="card">
+    <button class="btn btn-primary" onclick="goCreate()">🏟 ルームを作る（ホスト）</button>
+    <button class="btn btn-outline" onclick="goJoin()">🎫 ルームに参加する</button>
+  </div>
+  <div class="rules-box">
+    <div class="rules-title">📖 遊び方</div>
+    <ul class="rules-list">
+      <li>ホストがテーマと候補リストを作成し、URLを参加者に共有</li>
+      <li>全員がこっそり候補を1つ指名（他の人には見えない）</li>
+      <li>全員完了後、ホストが1人ずつ順番に発表</li>
+      <li>同じ候補に複数人が指名した場合は封筒くじ引きで決定</li>
+      <li>外れた人は残りの候補から再指名（また競合したら再度くじ引き）</li>
+      <li>全巡終了後に最終結果を表示！</li>
+    </ul>
+  </div>
+</div>
+<div id="screen-create" class="screen">
+  <div class="banner"><div class="banner-title">ルーム作成</div><div class="banner-sub">ROOM SETUP</div></div>
+  <div class="card"><div class="card-title">📋 ドラフトの設定</div>
+  <label>ホスト名</label><input type="text" id="create-host-name" placeholder="例：田中">
+  <label>テーマ</label><input type="text" id="create-theme" placeholder="例：お昼ごはんドラフト">
+  <label>候補リスト（1行に1つ）</label><textarea id="create-candidates" placeholder="ラーメン&#10;カレー&#10;寿司&#10;うどん"></textarea>
+  <label>巡数</label><input type="number" id="create-rounds" value="3" min="1" max="10">
+  <button class="btn btn-primary" onclick="createRoom()">🎯 ルームを作成する</button>
+  <button class="btn btn-outline" onclick="showScreen('screen-top')">← 戻る</button></div>
+</div>
+<div id="screen-join" class="screen">
+  <div class="banner"><div class="banner-title">参加</div><div class="banner-sub">JOIN ROOM</div></div>
+  <div class="card"><div class="card-title">🎫 ルームに参加する</div>
+  <label>ルームID</label><input type="text" id="join-room-id" placeholder="例：ABC123" style="text-transform:uppercase">
+  <label>あなたの名前</label><input type="text" id="join-name" placeholder="例：鈴木">
+  <button class="btn btn-secondary" onclick="joinRoom()">参加する</button>
+  <button class="btn btn-outline" onclick="showScreen('screen-top')">← 戻る</button></div>
+</div>
+<div id="screen-lobby" class="screen">
+  <div class="banner"><div class="banner-title" id="lobby-theme">-</div><div class="banner-sub">ロビー | LOBBY</div></div>
+  <div class="card"><div class="card-title">📡 ルーム情報</div>
+  ルームID：<span class="room-id-badge" id="lobby-room-id">-</span>
+  <div class="mt-8 small">このURLを参加者に共有してください</div>
+  <div class="share-url-box" id="share-url">-</div>
+  <button class="btn btn-outline" id="copy-btn" onclick="copyShareUrl()">URLをコピー</button></div>
+  <div class="card"><div class="card-title">👥 参加者</div><ul class="player-list" id="lobby-players"></ul></div>
+  <button class="btn btn-primary" id="start-btn" onclick="startGame()" style="display:none">ドラフト開始！</button>
+  <p class="small text-center mt-8">ホストが「ドラフト開始」を押すまでお待ちください</p>
+</div>
+<div id="screen-picking" class="screen">
+  <div class="banner"><div class="banner-title" id="pick-theme">-</div><div class="banner-sub"><span id="pick-round">-</span> <span id="pick-rounds-total"></span></div></div>
+  <span class="phase-badge">指名中</span>
+  <div class="retry-notice" id="retry-notice"></div>
+  <div class="my-pick-display" id="pick-my-pick">候補をタップして指名してください</div>
+  <div class="history-box" id="pick-history"></div>
+  <div id="cand-section"><div class="card"><div class="card-title">🗳 候補リスト</div><ul class="cand-list" id="pick-candidates"></ul></div></div>
+  <div class="card"><div class="card-title">⏳ 指名状況 <span class="small">（名前をタップで履歴確認）</span></div><ul class="wait-list" id="pick-wait-list"></ul></div>
+  <button class="btn btn-primary" id="start-reveal-btn" onclick="startReveal()" style="display:none">📢 全員完了！発表へ</button>
+</div>
+<div id="screen-revealing" class="screen">
+  <div class="reveal-header">
+    <div class="reveal-header-theme" id="reveal-theme">-</div>
+    <div class="reveal-header-round" id="reveal-big-round">-</div>
+  </div>
+  <div id="reveal-big">
+    <div class="reveal-big-label">指名発表</div>
+    <div class="reveal-big-name" id="reveal-big-name"></div>
+    <div class="reveal-big-pick-wrap"><div class="reveal-big-pick" id="reveal-big-pick"></div></div>
+  </div>
+  <div class="reveal-btns">
+    <button class="btn btn-reveal" id="reveal-show-btn" onclick="revealShowPick()" style="display:none">🎤 発表！</button>
+    <button class="btn btn-secondary" id="next-reveal-btn" onclick="nextReveal()" style="display:none">▶ 次へ</button>
+  </div>
+  <div id="reveal-summary"><div class="summary-title" id="reveal-summary-title"></div><div id="reveal-summary-list"></div></div>
+  <div id="reveal-done-msg">全員の発表が終わりました！</div>
+  <div class="reveal-btns"><button class="btn btn-primary" id="judge-btn" onclick="judgeRound()" style="display:none">⚖️ 競合チェック＆次へ</button></div>
+</div>
+<div id="screen-round-summary" class="screen" style="padding:0;">
+  <div class="rs-header"><div class="rs-title-text" id="rs-title">確定結果</div></div>
+  <div style="padding:0 20px 20px;" id="rs-list"></div>
+  <div style="padding:0 20px 20px;">
+    <button class="btn btn-primary" id="rs-next-btn" onclick="roundSummaryNext()" style="display:none">→ 次の巡へ</button>
+  </div>
+</div>
+<div id="screen-lottery-pick" class="screen" style="padding:0;">
+  <div class="lp-header" id="lp-title">封筒くじ引き</div>
+  <div id="lp-status"></div>
+  <div style="padding:0 20px 20px;" id="lp-envelopes"></div>
+  <div style="padding:0 20px 20px;">
+    <button class="btn btn-reveal" id="lp-reveal-btn" onclick="revealEnvelopes()" style="display:none">📬 一斉開封！</button>
+    <button class="btn btn-gold" id="lp-next-btn" onclick="lotteryPickNext()" style="display:none">→ 次へ</button>
+  </div>
+</div>
+<div id="screen-done" class="screen">
+  <div class="banner"><div class="banner-title">ドラフト終了！</div><div class="banner-sub" id="done-theme">-</div></div>
+  <div class="results-grid" id="done-results"></div>
+  <button class="btn btn-outline mt-16" onclick="location.href=location.pathname">🏠 トップに戻る</button>
+</div>
+</body>
+</html>
