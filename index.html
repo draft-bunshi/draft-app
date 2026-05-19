@@ -198,13 +198,13 @@
 
     // 自分が指名対象かどうか
     const myTurn=!isRetry||retryPlayers.includes(myPlayerId);
-    const iAmDone=isPlayerDone(myPlayerId)&&!isRetry;
+    const iAmDone=isPlayerDone(myPlayerId)&&!retryPlayers?.includes(myPlayerId);
     const candSection=document.getElementById('cand-section');
     if(candSection)candSection.style.display=(myTurn&&!iAmDone)?'block':'none';
 
     const retryNotice=document.getElementById('retry-notice');
     if(retryNotice){
-      if(iAmDone){retryNotice.style.display='block';retryNotice.textContent='あなたは選択終了しています';}
+      if(iAmDone&&!isRetry){retryNotice.style.display='block';retryNotice.textContent='あなたは選択終了しています';}
       else if(isRetry&&!myTurn){
         const retryNames=retryPlayers.filter(pid=>!isPlayerDone(pid)).map(pid=>pl[pid]?.name||pid).join('、');
         retryNotice.style.display='block';
@@ -269,10 +269,8 @@
 
   async function startRetryReveal(){
     const retryPlayers=roomData.retryPlayers||[];
-    const donePlayers=roomData.donePlayers||[];
-    const active=retryPlayers;
-    if(active.length===0){await advanceRound(roomData.currentRound);return;}
-    const queue=active.map(pid=>({pid,isRetry:true}));
+    if(retryPlayers.length===0){await advanceRound(roomData.currentRound);return;}
+    const queue=retryPlayers.map(pid=>({pid,isRetry:true}));
     await update(getRoomRef(),{phase:'revealing',revealQueue:queue,revealQueueIndex:0,revealSubStep:0,revealShown:{}});
   }
 
@@ -520,15 +518,17 @@
 
   window.lotteryPickNext=async function(){
     const round=roomData.currentRound;const groups=roomData.lotteryGroups||[];
-    const donePlayers=roomData.donePlayers||[];
-    const roundResults={...(roomData.results?.[round]||{})};const retryList=[];
+    const roundResults={...(roomData.results?.[round]||{})};
+    const retryList=[];
     for(const group of groups){
       const winner=group.winner;
       for(const pid of group.pids)roundResults[pid]={candidate:group.candidate,winner,competed:true};
-      retryList.push(...group.pids.filter(p=>p!==winner));
+      // 外れた人は全員再指名（donePlayers に関係なく）
+      group.pids.filter(p=>p!==winner).forEach(p=>retryList.push(p));
     }
     await update(getRoomRef(),{['results/'+round]:roundResults});
 
+    const donePlayers=roomData.donePlayers||[];
     const allResults={...roomData.results,[round]:roundResults};
     if(shouldGameEnd(allResults,donePlayers)){
       await update(getRoomRef(),{phase:'done',retryPlayers:null,totalRounds:round,lotteryGroups:null,lotteryRevealed:false});
@@ -536,16 +536,26 @@
     }
 
     if(retryList.length>0){
+      // 外れた人のpicksをクリアして再指名フェーズへ
       const clearUpdates={};
       for(const pid of retryList)clearUpdates['picks/'+round+'/'+pid]=null;
       await update(getRoomRef(),clearUpdates);
+      // 再指名者を発表キューに入れてrevealingへ（どでかく表示）
       const queue=retryList.map(pid=>({pid,isRetry:true}));
-      await update(getRoomRef(),{phase:'revealing',revealQueue:queue,revealQueueIndex:0,revealSubStep:0,revealShown:{},retryPlayers:retryList,lotteryGroups:null,lotteryRevealed:false});
+      await update(getRoomRef(),{
+        phase:'revealing',
+        revealQueue:queue,
+        revealQueueIndex:0,
+        revealSubStep:0,
+        revealShown:{},
+        retryPlayers:retryList,
+        lotteryGroups:null,
+        lotteryRevealed:false
+      });
     } else {
       await update(getRoomRef(),{phase:'round_summary',retryPlayers:null,roundSummaryRound:round,lotteryGroups:null,lotteryRevealed:false});
     }
   };
-
   async function advanceRound(round){
     const next=round+1;
     await update(getRoomRef(),{phase:'picking',currentRound:next,retryPlayers:null,revealQueue:null,revealShown:{},['picks/'+next]:{}});
