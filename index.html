@@ -171,7 +171,7 @@
 
     // 再指名対象：retryPlayersに含まれる人のみ（選択終了済みは除く）
     const activeOrder=isRetry
-      ?order.filter(pid=>retryPlayers.includes(pid)&&!isPlayerDone(pid))
+      ?order.filter(pid=>retryPlayers.includes(pid))
       :order.filter(pid=>!isPlayerDone(pid));
 
     // 指名状況表示（全員分）
@@ -198,7 +198,7 @@
 
     // 自分が指名対象かどうか
     const myTurn=!isRetry||retryPlayers.includes(myPlayerId);
-    const iAmDone=isPlayerDone(myPlayerId);
+    const iAmDone=isPlayerDone(myPlayerId)&&!isRetry;
     const candSection=document.getElementById('cand-section');
     if(candSection)candSection.style.display=(myTurn&&!iAmDone)?'block':'none';
 
@@ -270,7 +270,7 @@
   async function startRetryReveal(){
     const retryPlayers=roomData.retryPlayers||[];
     const donePlayers=roomData.donePlayers||[];
-    const active=retryPlayers.filter(pid=>!donePlayers.includes(pid));
+    const active=retryPlayers;
     if(active.length===0){await advanceRound(roomData.currentRound);return;}
     const queue=active.map(pid=>({pid,isRetry:true}));
     await update(getRoomRef(),{phase:'revealing',revealQueue:queue,revealQueueIndex:0,revealSubStep:0,revealShown:{}});
@@ -525,7 +525,7 @@
     for(const group of groups){
       const winner=group.winner;
       for(const pid of group.pids)roundResults[pid]={candidate:group.candidate,winner,competed:true};
-      retryList.push(...group.pids.filter(p=>p!==winner&&!donePlayers.includes(p)));
+      retryList.push(...group.pids.filter(p=>p!==winner));
     }
     await update(getRoomRef(),{['results/'+round]:roundResults});
 
