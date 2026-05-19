@@ -19,6 +19,8 @@
   const app = initializeApp(firebaseConfig);
   const db = getDatabase(app);
   let roomId=null,myPlayerId=null,myPlayerName=null,isHost=false,roomData=null,unsubscribe=null;
+  // 未確定の選択（ローカル状態）
+  let localSelected=null;
 
   function generateId(len=6){return Math.random().toString(36).substring(2,2+len).toUpperCase();}
   function getRoomRef(path=''){return ref(db,'rooms/'+roomId+path);}
@@ -65,7 +67,16 @@
 
   function startListening(){
     if(unsubscribe)unsubscribe();
-    unsubscribe=onValue(getRoomRef(),snap=>{if(!snap.exists())return;roomData=snap.val();renderCurrentState();});
+    unsubscribe=onValue(getRoomRef(),snap=>{
+      if(!snap.exists())return;
+      const prev=roomData;
+      roomData=snap.val();
+      // フェーズが変わったらローカル選択をリセット
+      if(!prev||prev.phase!==roomData.phase||prev.currentRound!==roomData.currentRound){
+        localSelected=null;
+      }
+      renderCurrentState();
+    });
   }
 
   function renderCurrentState(){
@@ -98,6 +109,8 @@
   };
 
   // ===== 指名 =====
+  const SKIP = '__SKIP__';
+
   function getUsed(){
     const used=new Set();
     const r=roomData.results||{};
@@ -115,6 +128,31 @@
       }
     }
     alert(p.name+'の獲得履歴\n\n'+(lines.length>0?lines.join('\n'):'まだ獲得なし'));
+  };
+
+  // チェックボックス選択
+  window.selectOption=function(val){
+    localSelected=val;
+    // チェックボックスの見た目を更新
+    document.querySelectorAll('.cand-checkbox').forEach(cb=>{
+      cb.checked=(cb.dataset.val===val);
+    });
+    // 確定ボタンを有効化
+    const btn=document.getElementById('confirm-btn');
+    if(btn){btn.disabled=false;btn.classList.remove('btn-disabled');}
+  };
+
+  // 確定ボタン
+  window.confirmPick=async function(){
+    if(localSelected===null){alert('候補を選んでください');return;}
+    const round=roomData.currentRound;
+    const value=localSelected===SKIP?'（指名なし）':localSelected;
+    await set(ref(db,'rooms/'+roomId+'/picks/'+round+'/'+myPlayerId),value);
+    localSelected=null;
+    // 確定後は入力欄を無効化
+    document.querySelectorAll('.cand-checkbox').forEach(cb=>cb.disabled=true);
+    const btn=document.getElementById('confirm-btn');
+    if(btn){btn.disabled=true;btn.textContent='✅ 確定済み';}
   };
 
   function renderPicking(){
@@ -140,19 +178,58 @@
     const allDone=activeOrder.every(pid=>picks[pid]!==undefined);
     const rb=document.getElementById('start-reveal-btn');
     if(rb)rb.style.display=(isHost&&allDone&&!isRetry)?'block':'none';
-    // 再指名で全員完了したら自動で発表へ
     if(isRetry&&allDone&&isHost){setTimeout(()=>startRetryReveal(),500);}
 
+    // 自分が指名対象かどうか
     const myTurn=!isRetry||retryPlayers.includes(myPlayerId);
     const candSection=document.getElementById('cand-section');
     if(candSection)candSection.style.display=myTurn?'block':'none';
 
+    // 待機中の通知
+    const retryNotice=document.getElementById('retry-notice');
+    if(retryNotice){
+      if(isRetry&&!myTurn){
+        const retryNames=retryPlayers.map(pid=>pl[pid]?.name||pid).join('、');
+        retryNotice.style.display='block';
+        retryNotice.textContent='再指名中：'+retryNames;
+      } else retryNotice.style.display='none';
+    }
+
     if(myTurn){
+      // 候補リスト（使用済みを除く）＋「指名なし」
       const used=getUsed();
       const cands=(roomData.candidates||[]).filter(c=>!used.has(c));
-      document.getElementById('pick-candidates').innerHTML=cands.map(c=>'<li><button class="cand-btn '+(myPick===c?'selected':'')+'" onclick="selectCandidate(\''+escA(c)+'\')">'+esc(c)+'</button></li>').join('');
+
+      if(myPick!==undefined){
+        // 確定済み
+        document.getElementById('pick-my-pick').textContent='✅ 確定：'+myPick;
+        let html='<div class="confirmed-pick">'+esc(myPick)+'</div>';
+        document.getElementById('pick-candidates').innerHTML=html;
+        const btn=document.getElementById('confirm-btn');
+        if(btn){btn.disabled=true;btn.textContent='✅ 確定済み';btn.classList.add('btn-disabled');}
+      } else {
+        // 未確定
+        document.getElementById('pick-my-pick').textContent='候補を選んで「確定」を押してください';
+        let html='';
+        // 通常候補
+        cands.forEach(c=>{
+          const checked=localSelected===c;
+          html+='<li><label class="cand-label"><input type="checkbox" class="cand-checkbox" data-val="'+esc(c)+'" '+(checked?'checked':'')+' onchange="selectOption(\''+escA(c)+'\')"> '+esc(c)+'</label></li>';
+        });
+        // 指名なし
+        html+='<li><label class="cand-label skip-label"><input type="checkbox" class="cand-checkbox" data-val="'+SKIP+'" '+(localSelected===SKIP?'checked':'')+' onchange="selectOption(\''+SKIP+'\')"> 指名なし（この巡はパス）</label></li>';
+        document.getElementById('pick-candidates').innerHTML=html;
+        const btn=document.getElementById('confirm-btn');
+        if(btn){
+          btn.disabled=localSelected===null;
+          btn.textContent='✔ 確定する';
+          if(localSelected===null)btn.classList.add('btn-disabled');
+          else btn.classList.remove('btn-disabled');
+        }
+      }
+    } else {
+      document.getElementById('pick-my-pick').textContent='今巡はあなたの指名はありません（待機中）';
     }
-    document.getElementById('pick-my-pick').textContent=myTurn?(myPick?'今巡の指名：'+myPick:'候補をタップして指名してください'):'今巡はあなたの指名はありません（待機中）';
 
     // 過去の獲得履歴
     const allResults=roomData.results||{};
@@ -167,36 +244,20 @@
       if(historyLines.length>0){histEl.style.display='block';histEl.innerHTML='<div class="history-title">🏆 あなたのこれまでの獲得</div>'+historyLines.map(l=>'<div class="history-item">'+esc(l)+'</div>').join('');}
       else histEl.style.display='none';
     }
-    // 待機中の人には誰が再指名対象かを表示
-    const retryNotice=document.getElementById('retry-notice');
-    if(retryNotice){
-      if(isRetry&&!myTurn){
-        const retryNames=retryPlayers.map(pid=>pl[pid]?.name||pid).join('、');
-        retryNotice.style.display='block';
-        retryNotice.textContent='再指名中：'+retryNames;
-      } else retryNotice.style.display='none';
-    }
   }
-
-  window.selectCandidate=async function(c){
-    await set(ref(db,'rooms/'+roomId+'/picks/'+roomData.currentRound+'/'+myPlayerId),c);
-  };
 
   // 通常の発表開始
   window.startReveal=async function(){
-    const round=roomData.currentRound;
-    const pl=roomData.players||{};
     const order=roomData.playerOrder||[];
-    // revealQueue: 発表する人の順番リスト
     const queue=order.map(pid=>({pid,isRetry:false}));
-    await update(getRoomRef(),{phase:'revealing',revealQueue:queue,revealQueueIndex:0,revealShown:{}});
+    await update(getRoomRef(),{phase:'revealing',revealQueue:queue,revealQueueIndex:0,revealSubStep:0,revealShown:{}});
   };
 
   // 再指名後の発表開始
   async function startRetryReveal(){
     const retryPlayers=roomData.retryPlayers||[];
     const queue=retryPlayers.map(pid=>({pid,isRetry:true}));
-    await update(getRoomRef(),{phase:'revealing',revealQueue:queue,revealQueueIndex:0,revealShown:{}});
+    await update(getRoomRef(),{phase:'revealing',revealQueue:queue,revealQueueIndex:0,revealSubStep:0,revealShown:{}});
   }
 
   // ===== 発表 =====
@@ -208,7 +269,7 @@
     const order=roomData.playerOrder||[];
     const queue=roomData.revealQueue||[];
     const qIdx=roomData.revealQueueIndex||0;
-    const subStep=(roomData.revealSubStep||0); // 0=個人発表, 1=全体サマリー
+    const subStep=roomData.revealSubStep||0;
 
     document.getElementById('reveal-theme').textContent=roomData.theme;
 
@@ -220,7 +281,6 @@
     if(showBtn)showBtn.style.display='none';
 
     if(qIdx>=queue.length){
-      // 全員発表完了 → 競合チェックへ
       document.getElementById('reveal-big').style.display='none';
       document.getElementById('reveal-summary').style.display='none';
       document.getElementById('reveal-done-msg').style.display='block';
@@ -229,12 +289,11 @@
       return;
     }
 
-    const {pid} = queue[qIdx];
+    const {pid}=queue[qIdx];
     const p=pl[pid];
     const pick=picks[pid]||'（指名なし）';
 
     if(subStep===0){
-      // 個人発表：どでかく
       document.getElementById('reveal-big').style.display='flex';
       document.getElementById('reveal-summary').style.display='none';
       document.getElementById('reveal-done-msg').style.display='none';
@@ -249,14 +308,11 @@
         if(showBtn)showBtn.style.display=isHost?'block':'none';
       }
     } else {
-      // サマリー：全員名前表示、発表済みは選択内容、未発表は—
       document.getElementById('reveal-big').style.display='none';
       document.getElementById('reveal-summary').style.display='block';
       document.getElementById('reveal-done-msg').style.display='none';
       const isRetryReveal=queue[0]?.isRetry||false;
       document.getElementById('reveal-summary-title').textContent=isRetryReveal?'第'+round+'巡　再指名の結果':'第'+round+'巡　ここまでの結果';
-
-      // 全員分表示（発表済みのみ内容、それ以外は—）
       const revealedPids=new Set(queue.slice(0,qIdx+1).map(q=>q.pid));
       let html='';
       for(const pid2 of order){
@@ -270,20 +326,11 @@
     }
   }
 
-  window.revealShowPick=async function(){
-    await update(getRoomRef(),{['revealShown/'+(roomData.revealQueueIndex||0)]:true});
-  };
-
+  window.revealShowPick=async function(){await update(getRoomRef(),{['revealShown/'+String(roomData.revealQueueIndex||0)]:true});};
   window.nextReveal=async function(){
     const subStep=roomData.revealSubStep||0;
-    if(subStep===0){
-      // 個人発表 → サマリーへ
-      await update(getRoomRef(),{revealSubStep:1});
-    } else {
-      // サマリー → 次の人の個人発表へ
-      const newIdx=(roomData.revealQueueIndex||0)+1;
-      await update(getRoomRef(),{revealQueueIndex:newIdx,revealSubStep:0});
-    }
+    if(subStep===0){await update(getRoomRef(),{revealSubStep:1});}
+    else{const newIdx=(roomData.revealQueueIndex||0)+1;await update(getRoomRef(),{revealQueueIndex:newIdx,revealSubStep:0});}
   };
 
   // ===== 競合チェック =====
@@ -295,9 +342,17 @@
     const targetPicks=isRetry?Object.fromEntries(Object.entries(picks).filter(([pid])=>retryPlayers.includes(pid))):picks;
 
     const candMap={};
-    for(const[pid,cand]of Object.entries(targetPicks)){if(!candMap[cand])candMap[cand]=[];candMap[cand].push(pid);}
+    for(const[pid,cand]of Object.entries(targetPicks)){
+      if(cand==='（指名なし）')continue; // 指名なしは競合しない
+      if(!candMap[cand])candMap[cand]=[];
+      candMap[cand].push(pid);
+    }
 
     const singles={};const conflictGroups=[];
+    // 指名なしの人も singles に追加
+    for(const[pid,cand]of Object.entries(targetPicks)){
+      if(cand==='（指名なし）')singles[pid]={candidate:'（指名なし）',winner:pid,competed:false};
+    }
     for(const[cand,pids]of Object.entries(candMap)){
       if(pids.length===1)singles[pids[0]]={candidate:cand,winner:pids[0],competed:false};
       else conflictGroups.push({candidate:cand,pids});
@@ -307,10 +362,8 @@
     await update(getRoomRef(),{['results/'+round]:currentResults});
 
     if(conflictGroups.length===0){
-      // 競合なし → 巡サマリーへ
       await update(getRoomRef(),{phase:'round_summary',retryPlayers:null,roundSummaryRound:round});
     } else {
-      // 競合あり → 封筒くじ引きへ
       const allConflict=[...new Set(conflictGroups.flatMap(g=>g.pids))];
       const shuffled=[...allConflict].sort(()=>Math.random()-0.5);
       const lotteryGroups=conflictGroups.map(g=>{
@@ -330,26 +383,18 @@
     const order=roomData.playerOrder||[];
     const results=roomData.results||{};
     const roundResults=results[round]||{};
-
     document.getElementById('rs-title').textContent='第'+round+'巡　確定結果';
-
-    // その巡の獲得者だけ表示
     let html='';
     for(const pid of order){
-      const p=pl[pid];
-      const item=roundResults[pid];
-      const won=item&&item.winner===pid;
+      const p=pl[pid];const item=roundResults[pid];const won=item&&item.winner===pid;
       html+='<div class="rs-row'+(won?'':' rs-pending')+'"><span class="rs-name">'+esc(p?.name||'')+'</span><span class="rs-pick">'+(won?esc(item.candidate):'—')+'</span></div>';
     }
     document.getElementById('rs-list').innerHTML=html;
-
     const nextBtn=document.getElementById('rs-next-btn');
     if(nextBtn)nextBtn.style.display=isHost?'block':'none';
   }
-
   window.roundSummaryNext=async function(){
-    const round=roomData.roundSummaryRound||roomData.currentRound;
-    await advanceRound(round);
+    await advanceRound(roomData.roundSummaryRound||roomData.currentRound);
   };
 
   // ===== 封筒くじ引き =====
@@ -360,14 +405,10 @@
     const pickOrder=roomData.lotteryPickOrder||[];
     const pickIndex=roomData.lotteryPickIndex||0;
     const revealed=roomData.lotteryRevealed||false;
-
     const candNames=groups.map(g=>g.candidate).join('・');
     document.getElementById('lp-title').textContent='「'+candNames+'」競合！封筒くじ引き';
-
     const allChosen=groups.every(g=>Object.keys(g.chosen||{}).length===g.pids.length);
-
     if(revealed){renderEnvelopeResult(groups,pl);return;}
-
     if(allChosen){
       document.getElementById('lp-envelopes').innerHTML='<div class="lp-all-chosen">全員が封筒を選びました！</div>';
       document.getElementById('lp-status').textContent='封筒を開封してください';
@@ -376,22 +417,18 @@
       document.getElementById('lp-next-btn').style.display='none';
       return;
     }
-
     const currentPid=pickOrder[pickIndex];
     const currentPlayer=pl[currentPid];
     const isMyTurn=currentPid===myPlayerId;
     document.getElementById('lp-status').textContent=isMyTurn?'あなたが封筒を選ぶ番です！':(currentPlayer?.name||'?')+'が選んでいます...';
     document.getElementById('lp-reveal-btn').style.display='none';
     document.getElementById('lp-next-btn').style.display='none';
-
     let html='';
     for(const group of groups){
-      const chosen=group.chosen||{};
-      const alreadyChosen=chosen[currentPid]!==undefined;
+      const chosen=group.chosen||{};const alreadyChosen=chosen[currentPid]!==undefined;
       html+='<div class="lp-group"><div class="lp-group-cand">「'+esc(group.candidate)+'」の封筒</div><div class="lp-envelopes-row">';
       for(let i=0;i<group.envelopes.length;i++){
-        const takenBy=Object.entries(chosen).find(([,v])=>Number(v)===i);
-        const isTaken=!!takenBy;const isMyChoice=takenBy&&takenBy[0]===myPlayerId;
+        const takenBy=Object.entries(chosen).find(([,v])=>Number(v)===i);const isTaken=!!takenBy;const isMyChoice=takenBy&&takenBy[0]===myPlayerId;
         if(isTaken){html+='<div class="envelope taken'+(isMyChoice?' mine':'')+'"><div class="env-icon">✉️</div><div class="env-label">'+(isMyChoice?'あなた':esc(pl[takenBy[0]]?.name||'?'))+'</div></div>';}
         else if(isMyTurn&&!alreadyChosen){html+='<div class="envelope pickable" onclick="pickEnvelope(\''+escA(group.candidate)+'\','+i+')"><div class="env-icon">✉️</div><div class="env-label">選ぶ</div></div>';}
         else{html+='<div class="envelope waiting"><div class="env-icon">✉️</div><div class="env-label">-</div></div>';}
@@ -402,9 +439,7 @@
   }
 
   window.pickEnvelope=async function(candidate,envIdx){
-    const groups=roomData.lotteryGroups||[];
-    const pickOrder=roomData.lotteryPickOrder||[];
-    const pickIndex=roomData.lotteryPickIndex||0;
+    const groups=roomData.lotteryGroups||[];const pickOrder=roomData.lotteryPickOrder||[];const pickIndex=roomData.lotteryPickIndex||0;
     if(pickOrder[pickIndex]!==myPlayerId)return;
     const groupIdx=groups.findIndex(g=>g.candidate===candidate);if(groupIdx<0)return;
     const updates={['lotteryGroups/'+groupIdx+'/chosen/'+myPlayerId]:envIdx};
@@ -434,27 +469,22 @@
   window.revealEnvelopes=async function(){await update(getRoomRef(),{lotteryRevealed:true});};
 
   window.lotteryPickNext=async function(){
-    const round=roomData.currentRound;
-    const groups=roomData.lotteryGroups||[];
-    const roundResults={...(roomData.results?.[round]||{})};
-    const retryList=[];
+    const round=roomData.currentRound;const groups=roomData.lotteryGroups||[];
+    const roundResults={...(roomData.results?.[round]||{})};const retryList=[];
     for(const group of groups){
       const winner=group.winner;
       for(const pid of group.pids)roundResults[pid]={candidate:group.candidate,winner,competed:true};
       retryList.push(...group.pids.filter(p=>p!==winner));
     }
     await update(getRoomRef(),{['results/'+round]:roundResults});
-
     if(retryList.length>0){
       // 外れた人の picks をクリアして再指名発表へ
       const clearUpdates={};
       for(const pid of retryList)clearUpdates['picks/'+round+'/'+pid]=null;
       await update(getRoomRef(),clearUpdates);
-      // 再指名者を revealQueue にして発表フェーズへ（どでかく表示）
       const queue=retryList.map(pid=>({pid,isRetry:true}));
       await update(getRoomRef(),{phase:'revealing',revealQueue:queue,revealQueueIndex:0,revealSubStep:0,revealShown:{},retryPlayers:retryList,lotteryGroups:null,lotteryRevealed:false});
     } else {
-      // 全員確定 → 巡サマリーへ
       await update(getRoomRef(),{phase:'round_summary',retryPlayers:null,roundSummaryRound:round,lotteryGroups:null,lotteryRevealed:false});
     }
   };
@@ -472,7 +502,9 @@
     document.getElementById('done-theme').textContent=roomData.theme;
     const pd={};for(const pid of order)pd[pid]=[];
     for(const[round,rr]of Object.entries(results)){
-      for(const[pid,item]of Object.entries(rr)){if(item.winner===pid)pd[pid]&&pd[pid].push({round:parseInt(round),candidate:item.candidate});}
+      for(const[pid,item]of Object.entries(rr)){
+        if(item.winner===pid&&item.candidate!=='（指名なし）')pd[pid]&&pd[pid].push({round:parseInt(round),candidate:item.candidate});
+      }
     }
     let html='';
     for(const pid of order){const p=pl[pid];const drafts=pd[pid]||[];html+='<div class="result-card '+(pid===myPlayerId?'my-card':'')+'"><div class="result-name">'+(p.isHost?'👑 ':'')+esc(p.name)+'</div><ul class="result-picks">'+(drafts.sort((a,b)=>a.round-b.round).map(d=>'<li>第'+d.round+'巡：'+esc(d.candidate)+'</li>').join('')||'<li>獲得なし</li>')+'</ul></div>';}
@@ -504,6 +536,8 @@ textarea{min-height:120px;resize:vertical;}
 .btn-outline{background:transparent;color:var(--ink);border:1.5px solid var(--border);box-shadow:2px 2px 0 var(--shadow);}
 .btn-gold{background:var(--gold);color:#fff;box-shadow:3px 3px 0 #7a5a00;}
 .btn-reveal{background:#1a1208;color:#f5efe0;box-shadow:3px 3px 0 #000;font-size:1.2rem;padding:18px;}
+.btn-confirm{background:var(--accent);color:#fff;box-shadow:3px 3px 0 #1a3d5c;margin-top:8px;}
+.btn-disabled{background:#aaa !important;box-shadow:none !important;cursor:not-allowed !important;opacity:.6;}
 #screen-top .logo{text-align:center;padding:32px 0 24px;}
 .logo-main{font-size:2.6rem;font-weight:900;color:var(--red);letter-spacing:.2em;display:block;}
 .logo-en{font-size:.75rem;color:var(--border);letter-spacing:.3em;margin-top:6px;}
@@ -520,14 +554,19 @@ textarea{min-height:120px;resize:vertical;}
 .wait-list li.done{color:#27ae60;}.wait-list li.waiting{color:var(--border);}
 .player-name-btn{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;}
 .player-name-btn.me{font-weight:700;color:var(--red);}
-.cand-list{list-style:none;padding:0;}.cand-list li{margin-bottom:8px;}
-.cand-btn{width:100%;padding:12px 16px;background:var(--paper);border:1.5px solid var(--border);border-radius:3px;font-family:var(--font-serif);font-size:1rem;text-align:left;cursor:pointer;}
-.cand-btn.selected{background:var(--red);color:#fff;border-color:var(--red);font-weight:700;}
+.cand-list{list-style:none;padding:0;}.cand-list li{margin-bottom:6px;}
+.cand-label{display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--paper);border:1.5px solid var(--border);border-radius:3px;cursor:pointer;font-size:1rem;transition:background .15s;}
+.cand-label:hover{background:var(--paper2);}
+.cand-label input[type=checkbox]{width:18px;height:18px;cursor:pointer;accent-color:var(--red);}
+.cand-label input[type=checkbox]:checked+*{font-weight:700;color:var(--red);}
+.cand-label input[type=checkbox]:checked{accent-color:var(--red);}
+.skip-label{border-style:dashed;color:var(--border);}
+.confirmed-pick{padding:14px;background:#e8f5e9;border:2px solid #27ae60;border-radius:4px;font-weight:700;font-size:1.1rem;text-align:center;color:#27ae60;}
 .my-pick-display{background:var(--paper2);border-left:4px solid var(--red);padding:10px 14px;margin:14px 0;font-weight:700;}
 .history-box{background:#fff8ee;border:1px solid var(--border);border-radius:4px;padding:14px;margin-bottom:14px;display:none;}
 .history-title{font-size:.82rem;color:var(--border);font-weight:700;margin-bottom:8px;}
 .history-item{font-size:.95rem;padding:4px 0;border-bottom:1px dotted var(--paper2);}
-.retry-notice{background:#fff3cd;border:1.5px solid var(--gold);border-radius:4px;padding:10px 14px;margin-bottom:14px;font-size:.9rem;font-weight:700;color:var(--gold);display:none;}
+.retry-notice{background:#fff3cd;border:1.5px solid var(--gold);border-radius:4px;padding:10px 14px;margin-bottom:14px;font-size:.9rem;font-weight:700;color:#856404;display:none;}
 #screen-revealing{max-width:100%;padding:0;}
 .reveal-header{text-align:center;padding:16px;background:var(--ink);color:var(--paper);}
 .reveal-header-theme{font-size:1rem;opacity:.7;}
@@ -542,7 +581,7 @@ textarea{min-height:120px;resize:vertical;}
 #reveal-summary{display:none;padding:24px;max-width:680px;margin:0 auto;}
 .summary-title{font-size:1.2rem;font-weight:900;color:var(--red);margin-bottom:16px;text-align:center;border-bottom:2px solid var(--border);padding-bottom:10px;}
 .summary-row{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--paper2);font-size:1rem;}
-.summary-row.not-yet{opacity:.45;}
+.summary-row.not-yet{opacity:.4;}
 .summary-name{font-weight:700;}.summary-pick{color:var(--red);font-weight:700;}
 .summary-row.not-yet .summary-pick{color:var(--border);font-weight:400;}
 #reveal-done-msg{display:none;text-align:center;padding:40px 24px;font-size:1.1rem;font-weight:700;}
@@ -551,8 +590,7 @@ textarea{min-height:120px;resize:vertical;}
 .rs-title-text{font-size:1.8rem;font-weight:900;color:var(--red);letter-spacing:.1em;}
 .rs-row{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--paper2);font-size:1.05rem;}
 .rs-row.rs-pending{opacity:.4;}
-.rs-name{font-weight:700;}
-.rs-pick{color:var(--red);font-weight:700;font-size:1.1rem;}
+.rs-name{font-weight:700;}.rs-pick{color:var(--red);font-weight:700;font-size:1.1rem;}
 #screen-lottery-pick{background:var(--paper);}
 .lp-header{text-align:center;background:var(--ink);color:var(--paper);padding:16px 20px;font-size:1.1rem;font-weight:900;}
 #lp-status{text-align:center;font-size:1rem;font-weight:700;padding:14px;color:var(--red);min-height:48px;}
@@ -594,7 +632,7 @@ textarea{min-height:120px;resize:vertical;}
     <div class="rules-title">📖 遊び方</div>
     <ul class="rules-list">
       <li>ホストがテーマと候補リストを作成し、URLを参加者に共有</li>
-      <li>全員がこっそり候補を1つ指名（他の人には見えない）</li>
+      <li>全員がこっそり候補を1つ選んで「確定」ボタンを押す（「指名なし」も選べる）</li>
       <li>全員完了後、ホストが1人ずつ順番に発表</li>
       <li>同じ候補に複数人が指名した場合は封筒くじ引きで決定</li>
       <li>外れた人は残りの候補から再指名（また競合したら再度くじ引き）</li>
@@ -635,9 +673,15 @@ textarea{min-height:120px;resize:vertical;}
   <div class="banner"><div class="banner-title" id="pick-theme">-</div><div class="banner-sub"><span id="pick-round">-</span> <span id="pick-rounds-total"></span></div></div>
   <span class="phase-badge">指名中</span>
   <div class="retry-notice" id="retry-notice"></div>
-  <div class="my-pick-display" id="pick-my-pick">候補をタップして指名してください</div>
+  <div class="my-pick-display" id="pick-my-pick">候補を選んで「確定」を押してください</div>
   <div class="history-box" id="pick-history"></div>
-  <div id="cand-section"><div class="card"><div class="card-title">🗳 候補リスト</div><ul class="cand-list" id="pick-candidates"></ul></div></div>
+  <div id="cand-section">
+    <div class="card">
+      <div class="card-title">🗳 候補リスト（1つ選んで確定）</div>
+      <ul class="cand-list" id="pick-candidates"></ul>
+      <button class="btn btn-confirm btn-disabled" id="confirm-btn" onclick="confirmPick()" disabled>✔ 確定する</button>
+    </div>
+  </div>
   <div class="card"><div class="card-title">⏳ 指名状況 <span class="small">（名前をタップで履歴確認）</span></div><ul class="wait-list" id="pick-wait-list"></ul></div>
   <button class="btn btn-primary" id="start-reveal-btn" onclick="startReveal()" style="display:none">📢 全員完了！発表へ</button>
 </div>
@@ -662,9 +706,7 @@ textarea{min-height:120px;resize:vertical;}
 <div id="screen-round-summary" class="screen" style="padding:0;">
   <div class="rs-header"><div class="rs-title-text" id="rs-title">確定結果</div></div>
   <div style="padding:0 20px 20px;" id="rs-list"></div>
-  <div style="padding:0 20px 20px;">
-    <button class="btn btn-primary" id="rs-next-btn" onclick="roundSummaryNext()" style="display:none">→ 次の巡へ</button>
-  </div>
+  <div style="padding:0 20px 20px;"><button class="btn btn-primary" id="rs-next-btn" onclick="roundSummaryNext()" style="display:none">→ 次の巡へ</button></div>
 </div>
 <div id="screen-lottery-pick" class="screen" style="padding:0;">
   <div class="lp-header" id="lp-title">封筒くじ引き</div>
