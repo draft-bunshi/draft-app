@@ -43,9 +43,9 @@
     const theme=document.getElementById('create-theme').value.trim();
     const cRaw=document.getElementById('create-candidates').value.trim();
     const hName=document.getElementById('create-host-name').value.trim();
-    if(!theme||!cRaw||!hName){alert('全て入力してください');return;}
+    if(!theme||!cRaw||!hName){alert('全て入力してください。');return;}
     const candidates=cRaw.split('\n').map(s=>s.trim()).filter(Boolean);
-    if(candidates.length<2){alert('候補を2つ以上入力してください');return;}
+    if(candidates.length<2){alert('候補は2つ以上入力してください。');return;}
     roomId=generateId(6);myPlayerId=generateId(8);myPlayerName=hName;isHost=true;savePlayerId(myPlayerId);
     await set(getRoomRef(),{theme,candidates,currentRound:1,phase:'lobby',
       players:{[myPlayerId]:{name:hName,isHost:true,joinedAt:Date.now()}},
@@ -59,7 +59,7 @@
     if(!rid||!name){alert('ルームIDと名前を入力してください');return;}
     roomId=rid;
     const snap=await get(ref(db,'rooms/'+roomId));
-    if(!snap.exists()){alert('ルームが見つかりません');return;}
+    if(!snap.exists()){alert('ルームが見つかりません。');return;}
     const data=snap.val();
     let pid=loadPlayerId();
     if(pid&&data.players&&data.players[pid]){
@@ -67,7 +67,7 @@
     } else if(data.phase==='lobby'){
       myPlayerId=generateId(8);myPlayerName=name;isHost=false;savePlayerId(myPlayerId);
       await update(ref(db,'rooms/'+roomId+'/players/'+myPlayerId),{name,isHost:false,joinedAt:Date.now()});
-    } else {alert('ゲームが既に始まっています');return;}
+    } else {alert('ゲームはすでに開始されています。');return;}
     startListening();showScreen('screen-lobby');updateShareUrl();
   };
 
@@ -80,7 +80,7 @@
     const url=location.origin+location.pathname+'?room='+roomId;
     navigator.clipboard.writeText(url).then(()=>{
       const b=document.getElementById('copy-btn');
-      b.textContent='コピーしました！';
+      b.textContent='コピーしました。';
       setTimeout(()=>b.textContent='URLをコピー',2000);
     });
   };
@@ -121,14 +121,14 @@
     const pl=roomData.players||{};
     document.getElementById('lobby-players').innerHTML=Object.values(pl)
       .sort((a,b)=>a.joinedAt-b.joinedAt)
-      .map(p=>'<li>'+(p.isHost?'👑 ':'')+esc(p.name)+'</li>').join('');
+      .map(p=>'<li>'+(p.isHost?'':'')+esc(p.name)+'</li>').join('');
     const sb=document.getElementById('start-btn');
     if(sb)sb.style.display=isHost?'block':'none';
   }
 
   window.startGame=async function(){
     const pl=roomData.players||{};
-    if(!Object.keys(pl).length){alert('参加者が必要です');return;}
+    if(!Object.keys(pl).length){alert('参加者が必要です。');return;}
     const order=Object.keys(pl).sort((a,b)=>pl[a].joinedAt-pl[b].joinedAt);
     await update(getRoomRef(),{phase:'picking',playerOrder:order,currentRound:1,
       picks:{},results:{},retryPlayers:null,revealQueue:null,donePlayers:[]});
@@ -164,7 +164,7 @@
   };
 
   window.confirmPick=async function(){
-    if(localSelected===null){alert('候補を選んでください');return;}
+    if(localSelected===null){alert('候補を選択してください。');return;}
     const round=roomData.currentRound;
     await set(ref(db,'rooms/'+roomId+'/picks/'+round+'/'+myPlayerId),localSelected);
     if(localSelected===DONE_PICK){
@@ -175,7 +175,7 @@
     localSelected=null;
     document.querySelectorAll('.cand-checkbox').forEach(cb=>cb.disabled=true);
     const btn=document.getElementById('confirm-btn');
-    if(btn){btn.disabled=true;btn.textContent='✅ 確定済み';btn.classList.add('btn-disabled');}
+    if(btn){btn.disabled=true;btn.textContent='確定済み';btn.classList.add('btn-disabled');}
   };
 
   function renderPicking(){
@@ -203,7 +203,7 @@
       const p=pl[pid];const done=picks[pid]!==undefined;const isMe=pid===myPlayerId;
       return '<li class="'+(done?'done':'waiting')+'">'
         +'<span class="player-name-btn'+(isMe?' me':'')+'" onclick="showPlayerHistory(\''+pid+'\')">'+esc(p.name)+'</span>'
-        +' '+(done?'✅':'⏳')+'</li>';
+        +' '+(done?'':'')+'</li>';
     }).join('');
 
     const allDone=activeOrder.every(pid=>picks[pid]!==undefined);
@@ -221,21 +221,21 @@
         retryNotice.style.display='block';
         retryNotice.textContent=isPlayerDone(myPlayerId)
           ?'あなたは選択終了しています'
-          :'待機中… ('+activeOrder.map(pid=>pl[pid]?.name||pid).join('、')+'が選択中)';
+          :'待機中… ('+activeOrder.map(pid=>pl[pid]?.name||pid).join('、')+'が選択中です。)';
       }
-      document.getElementById('pick-my-pick').textContent='今巡はあなたの番ではありません';
+      document.getElementById('pick-my-pick').textContent='今回はあなたの番ではありません。';
     } else {
       if(retryNotice)retryNotice.style.display='none';
       if(candSection)candSection.style.display='block';
 
       if(myPick!==undefined){
         const disp=myPick===DONE_PICK?'選択終了':myPick;
-        document.getElementById('pick-my-pick').textContent='✅ 確定：'+disp;
+        document.getElementById('pick-my-pick').textContent='確定：'+disp;
         document.getElementById('pick-candidates').innerHTML='<div class="confirmed-pick">'+esc(disp)+'</div>';
         const btn=document.getElementById('confirm-btn');
-        if(btn){btn.disabled=true;btn.textContent='✅ 確定済み';btn.classList.add('btn-disabled');}
+        if(btn){btn.disabled=true;btn.textContent='確定済み';btn.classList.add('btn-disabled');}
       } else {
-        document.getElementById('pick-my-pick').textContent='候補を選んで「確定」を押してください';
+        document.getElementById('pick-my-pick').textContent='候補を選択し、確定ボタンを押してください。';
         const used=getUsed();
         const cands=(roomData.candidates||[]).filter(c=>!used.has(c));
         let html='';
@@ -245,13 +245,13 @@
         });
         if(!isRetry){
           html+='<li><label class="cand-label done-label"><input type="checkbox" class="cand-checkbox" data-val="'+DONE_PICK+'" '
-            +(localSelected===DONE_PICK?'checked':'')+' onchange="selectOption(\''+DONE_PICK+'\')"> 🏁 選択終了（以降の巡もスキップ）</label></li>';
+            +(localSelected===DONE_PICK?'checked':'')+' onchange="selectOption(\''+DONE_PICK+'\')"> 選択終了（以降の巡もスキップ）</label></li>';
         }
         document.getElementById('pick-candidates').innerHTML=html;
         const btn=document.getElementById('confirm-btn');
         if(btn){
           btn.disabled=localSelected===null;
-          btn.textContent='✔ 確定する';
+          btn.textContent='確定する';
           btn.classList.toggle('btn-disabled',localSelected===null);
         }
       }
@@ -267,7 +267,7 @@
     if(histEl){
       if(historyLines.length){
         histEl.style.display='block';
-        histEl.innerHTML='<div class="history-title">🏆 あなたのこれまでの獲得</div>'
+        histEl.innerHTML='<div class="history-title">あなたのこれまでの獲得</div>'
           +historyLines.map(l=>'<div class="history-item">'+esc(l)+'</div>').join('');
       } else histEl.style.display='none';
     }
@@ -350,8 +350,8 @@
         const isRevealed=revealedPids.has(pid2);
         const rawP=picks[pid2];
         let pick2='—';
-        if(isRevealed) pick2=rawP===DONE_PICK?'🏁 選択終了':(rawP||'（指名なし）');
-        else if(isPlayerDone(pid2)) pick2='🏁';
+        if(isRevealed) pick2=rawP===DONE_PICK?'選択終了':(rawP||'（指名なし）');
+        else if(isPlayerDone(pid2)) pick2='';
         const st=isRevealed&&rawP!==DONE_PICK?'color:var(--red);font-weight:700':'color:var(--border);font-weight:400';
         html+='<div class="summary-row'+(isRevealed?'':' not-yet')+'">'
           +'<span class="summary-name">'+esc(p2?.name||'')+'</span>'
@@ -409,14 +409,22 @@
     } else {
       const allConflict=[...new Set(conflictGroups.flatMap(g=>g.pids))];
       // 引く順番をランダムシャッフル
-      const shuffledOrder=allConflict.slice().sort(()=>Math.random()-0.5);
+      const shuffledOrder=allConflict.slice();
+      for(let j=shuffledOrder.length-1;j>0;j--){
+        const k=Math.floor(Math.random()*(j+1));
+        [shuffledOrder[j],shuffledOrder[k]]=[shuffledOrder[k],shuffledOrder[j]];
+      }
       const lotteryGroups=conflictGroups.map(g=>{
         const winnerIdx=Math.floor(Math.random()*g.pids.length);
         const winner=g.pids[winnerIdx];
         // 封筒をランダムシャッフル（当たり位置も毎回変わる）
         const envelopes=g.pids.map((pid,i)=>({pid,isWinner:i===winnerIdx}))
-          .sort(()=>Math.random()-0.5)
-          .sort(()=>Math.random()-0.5);
+          ;
+        // Fisher-Yatesシャッフル（真のランダム）
+        for(let j=envelopes.length-1;j>0;j--){
+          const k=Math.floor(Math.random()*(j+1));
+          [envelopes[j],envelopes[k]]=[envelopes[k],envelopes[j]];
+        }
         return{candidate:g.candidate,pids:g.pids,envelopes,chosen:{},winner};
       });
       await update(getRoomRef(),{phase:'lottery_pick',lotteryGroups,
@@ -450,7 +458,7 @@
       const isDone=item&&item.candidate===DONE_PICK;
       html+='<div class="rs-row'+(won?'':' rs-pending')+'">'
         +'<span class="rs-name">'+esc(p?.name||'')+'</span>'
-        +'<span class="rs-pick">'+(won?esc(item.candidate):(isDone?'🏁 選択終了':'—'))+'</span></div>';
+        +'<span class="rs-pick">'+(won?esc(item.candidate):(isDone?'選択終了':'—'))+'</span></div>';
     }
     document.getElementById('rs-list').innerHTML=html;
     const nextBtn=document.getElementById('rs-next-btn');
@@ -477,8 +485,8 @@
     const allChosen=groups.every(g=>Object.keys(g.chosen||{}).length===g.pids.length);
     if(revealed){renderEnvelopeResult(groups,pl);return;}
     if(allChosen){
-      document.getElementById('lp-envelopes').innerHTML='<div class="lp-all-chosen">全員が封筒を選びました！</div>';
-      document.getElementById('lp-status').textContent='封筒を開封してください';
+      document.getElementById('lp-envelopes').innerHTML='<div class="lp-all-chosen">全員が封筒を選択しました。</div>';
+      document.getElementById('lp-status').textContent='封筒を開封してください。';
       const rb=document.getElementById('lp-reveal-btn');if(rb)rb.style.display=isHost?'block':'none';
       document.getElementById('lp-next-btn').style.display='none';
       return;
@@ -536,10 +544,10 @@
         // 当たり判定：この封筒を選んだ人が winner かどうか
         const isWon=takenBy&&takenBy[0]===group.winner;
         html+='<div class="envelope revealed '+(isWon?'winner':'loser')+'">'
-          +'<div class="env-icon">'+(isWon?'🎉':'💨')+'</div>'
+          +'<div class="env-icon">'+(isWon?'当':'外')+'</div>'
           +'<div class="env-label">'+playerName+'</div></div>';
       }
-      html+='</div><div class="lp-winner-announce">🏆 '+esc(pl[group.winner]?.name||'?')+' が「'+esc(group.candidate)+'」を獲得！</div>';
+      html+='</div><div class="lp-winner-announce">'+esc(pl[group.winner]?.name||'?')+' が「'+esc(group.candidate)+'」を獲得！</div>';
       const losers=group.pids.filter(p=>p!==group.winner).map(p=>pl[p]?.name||p);
       if(losers.length)html+='<div class="lp-losers">外れ：'+losers.map(esc).join('、')+' → 再指名へ</div>';
       html+='</div>';
@@ -610,7 +618,7 @@
     for(const pid of order){
       const p=pl[pid];const drafts=pd[pid]||[];
       html+='<div class="result-card '+(pid===myPlayerId?'my-card':'')+'"><div class="result-name">'
-        +(p.isHost?'👑 ':'')+esc(p.name)+'</div><ul class="result-picks">'
+        +(p.isHost?'':'')+esc(p.name)+'</div><ul class="result-picks">'
         +(drafts.sort((a,b)=>a.round-b.round).map(d=>'<li>第'+d.round+'巡：'+esc(d.candidate)+'</li>').join('')
           ||'<li>獲得なし</li>')+'</ul></div>';
     }
@@ -741,64 +749,64 @@ textarea{min-height:120px;resize:vertical;}
 <div id="screen-top" class="screen active">
   <div class="logo"><span class="logo-main">ドラフト会議</span><div class="logo-en">DRAFT CONFERENCE</div></div>
   <div class="card">
-    <button class="btn btn-primary" onclick="goCreate()">🏟 ルームを作る（ホスト）</button>
-    <button class="btn btn-outline" onclick="goJoin()">🎫 ルームに参加する</button>
+    <button class="btn btn-primary" onclick="goCreate()">ルームを作成する（ホスト）</button>
+    <button class="btn btn-outline" onclick="goJoin()">ルームに参加する</button>
   </div>
   <div class="rules-box">
-    <div class="rules-title">📖 遊び方</div>
+    <div class="rules-title">遊び方</div>
     <ul class="rules-list">
-      <li>① ホストがテーマと候補リストを作成し、URLを共有</li>
-      <li>② 全員が候補を1つ選んで「確定」を押す（他の人には見えない）</li>
+      <li>① ホストがテーマと候補リストを作成し、URLを参加者に共有</li>
+      <li>② 全員が候補を1つ選んで「確定」を押す（他の参加者には表示されません）</li>
       <li>③ 全員完了後、ホストが1人ずつ発表</li>
       <li>④ 競合したら封筒くじ引き。外れた人は残りから再指名</li>
       <li>⑤「選択終了」を選ぶと以降の巡をスキップ</li>
-      <li>⑥ 全員終了 or 全候補獲得でゲーム終了！</li>
+      <li>⑥ 全員が選択終了、または全候補が獲得されたらゲームを終了します。</li>
     </ul>
   </div>
 </div>
 <div id="screen-create" class="screen">
   <div class="banner"><div class="banner-title">ルーム作成</div><div class="banner-sub">ROOM SETUP</div></div>
-  <div class="card"><div class="card-title">📋 ドラフトの設定</div>
+  <div class="card"><div class="card-title">ドラフトの設定</div>
   <label>ホスト名</label><input type="text" id="create-host-name" placeholder="例：田中">
   <label>テーマ</label><input type="text" id="create-theme" placeholder="例：お惣菜ドラフト">
   <label>候補リスト（1行に1つ）</label><textarea id="create-candidates" placeholder="例：からあげ&#10;　　野菜炒め&#10;　　みそしる&#10;　　コロッケ"></textarea>
-  <button class="btn btn-primary" onclick="createRoom()">🎯 ルームを作成する</button>
-  <button class="btn btn-outline" onclick="showScreen('screen-top')">← 戻る</button></div>
+  <button class="btn btn-primary" onclick="createRoom()">ルームを作成する</button>
+  <button class="btn btn-outline" onclick="showScreen('screen-top')">戻る</button></div>
 </div>
 <div id="screen-join" class="screen">
   <div class="banner"><div class="banner-title">参加</div><div class="banner-sub">JOIN ROOM</div></div>
-  <div class="card"><div class="card-title">🎫 ルームに参加する</div>
+  <div class="card"><div class="card-title">ルームに参加する</div>
   <label>ルームID</label><input type="text" id="join-room-id" placeholder="例：ABC123" style="text-transform:uppercase">
   <label>あなたの名前</label><input type="text" id="join-name" placeholder="例：鈴木">
   <button class="btn btn-secondary" onclick="joinRoom()">参加する</button>
-  <button class="btn btn-outline" onclick="showScreen('screen-top')">← 戻る</button></div>
+  <button class="btn btn-outline" onclick="showScreen('screen-top')">戻る</button></div>
 </div>
 <div id="screen-lobby" class="screen">
   <div class="banner"><div class="banner-title" id="lobby-theme">-</div><div class="banner-sub">ロビー | LOBBY</div></div>
-  <div class="card"><div class="card-title">📡 ルーム情報</div>
+  <div class="card"><div class="card-title">ルーム情報</div>
   ルームID：<span class="room-id-badge" id="lobby-room-id">-</span>
   <div class="mt-8 small">このURLを参加者に共有してください</div>
   <div class="share-url-box" id="share-url">-</div>
   <button class="btn btn-outline" id="copy-btn" onclick="copyShareUrl()">URLをコピー</button></div>
-  <div class="card"><div class="card-title">👥 参加者</div><ul class="player-list" id="lobby-players"></ul></div>
-  <button class="btn btn-primary" id="start-btn" onclick="startGame()" style="display:none">ドラフト開始！</button>
+  <div class="card"><div class="card-title">参加者</div><ul class="player-list" id="lobby-players"></ul></div>
+  <button class="btn btn-primary" id="start-btn" onclick="startGame()" style="display:none">ドラフトを開始する</button>
   <p class="small text-center mt-8">ホストが「ドラフト開始」を押すまでお待ちください</p>
 </div>
 <div id="screen-picking" class="screen">
   <div class="banner"><div class="banner-title" id="pick-theme">-</div><div class="banner-sub" id="pick-round">-</div></div>
   <span class="phase-badge" style="display:inline-block;background:var(--red);color:#fff;font-size:.75rem;font-weight:700;padding:3px 10px;border-radius:2px;margin-bottom:10px;">指名中</span>
   <div class="retry-notice" id="retry-notice"></div>
-  <div class="my-pick-display" id="pick-my-pick">候補を選んで「確定」を押してください</div>
+  <div class="my-pick-display" id="pick-my-pick">候補を選択し、確定ボタンを押してください。</div>
   <div class="history-box" id="pick-history"></div>
   <div id="cand-section">
     <div class="card">
-      <div class="card-title">🗳 候補リスト（1つ選んで確定）</div>
+      <div class="card-title">候補リスト（1つ選んで確定）</div>
       <ul class="cand-list" id="pick-candidates"></ul>
-      <button class="btn btn-confirm btn-disabled" id="confirm-btn" onclick="confirmPick()" disabled>✔ 確定する</button>
+      <button class="btn btn-confirm btn-disabled" id="confirm-btn" onclick="confirmPick()" disabled>確定する</button>
     </div>
   </div>
-  <div class="card"><div class="card-title">⏳ 指名状況 <span class="small">（名前をタップで履歴確認）</span></div><ul class="wait-list" id="pick-wait-list"></ul></div>
-  <button class="btn btn-primary" id="start-reveal-btn" onclick="startReveal()" style="display:none">📢 全員完了！発表へ</button>
+  <div class="card"><div class="card-title">指名状況 <span class="small">（名前をタップすると獲得履歴を確認できます）</span></div><ul class="wait-list" id="pick-wait-list"></ul></div>
+  <button class="btn btn-primary" id="start-reveal-btn" onclick="startReveal()" style="display:none">全員が確定しました。発表へ</button>
 </div>
 <div id="screen-revealing" class="screen">
   <div class="reveal-header">
@@ -811,32 +819,32 @@ textarea{min-height:120px;resize:vertical;}
     <div class="reveal-big-pick-wrap"><div class="reveal-big-pick" id="reveal-big-pick"></div></div>
   </div>
   <div class="reveal-btns">
-    <button class="btn btn-reveal" id="reveal-show-btn" onclick="revealShowPick()" style="display:none">🎤 発表！</button>
-    <button class="btn btn-secondary" id="next-reveal-btn" onclick="nextReveal()" style="display:none">▶ 次へ</button>
+    <button class="btn btn-reveal" id="reveal-show-btn" onclick="revealShowPick()" style="display:none">発表！</button>
+    <button class="btn btn-secondary" id="next-reveal-btn" onclick="nextReveal()" style="display:none">次へ</button>
   </div>
   <div id="reveal-summary"><div class="summary-title" id="reveal-summary-title"></div><div id="reveal-summary-list"></div></div>
-  <div id="reveal-done-msg">全員の発表が終わりました！</div>
-  <div class="reveal-btns"><button class="btn btn-primary" id="judge-btn" onclick="judgeRound()" style="display:none">⚖️ 競合チェック＆次へ</button></div>
+  <div id="reveal-done-msg">全員の発表が終了しました。</div>
+  <div class="reveal-btns"><button class="btn btn-primary" id="judge-btn" onclick="judgeRound()" style="display:none">競合チェックへ進む</button></div>
 </div>
 <div id="screen-round-summary" class="screen" style="padding:0;">
   <div class="rs-header"><div class="rs-title-text" id="rs-title">確定結果</div></div>
   <div style="padding:0 20px 20px;" id="rs-list"></div>
-  <div style="padding:0 20px 20px;"><button class="btn btn-primary" id="rs-next-btn" onclick="roundSummaryNext()" style="display:none">→ 次の巡へ</button></div>
+  <div style="padding:0 20px 20px;"><button class="btn btn-primary" id="rs-next-btn" onclick="roundSummaryNext()" style="display:none">次の巡へ</button></div>
 </div>
 <div id="screen-lottery-pick" class="screen" style="padding:0;">
   <div class="lp-header" id="lp-title">封筒くじ引き</div>
   <div id="lp-status"></div>
   <div style="padding:0 20px 20px;" id="lp-envelopes"></div>
   <div style="padding:0 20px 20px;">
-    <button class="btn btn-reveal" id="lp-reveal-btn" onclick="revealEnvelopes()" style="display:none">📬 一斉開封！</button>
-    <button class="btn btn-gold" id="lp-next-btn" onclick="lotteryPickNext()" style="display:none">→ 次へ</button>
+    <button class="btn btn-reveal" id="lp-reveal-btn" onclick="revealEnvelopes()" style="display:none">一斉開封</button>
+    <button class="btn btn-gold" id="lp-next-btn" onclick="lotteryPickNext()" style="display:none">次へ</button>
   </div>
 </div>
 <div id="screen-done" class="screen">
   <div class="banner"><div class="banner-title">ドラフト終了！</div><div class="banner-sub" id="done-theme">-</div></div>
   <div class="done-total" id="done-total-rounds"></div>
   <div class="results-grid" id="done-results"></div>
-  <button class="btn btn-outline mt-16" onclick="location.href=location.pathname">🏠 トップに戻る</button>
+  <button class="btn btn-outline mt-16" onclick="location.href=location.pathname">トップに戻る</button>
 </div>
 </body>
 </html>
