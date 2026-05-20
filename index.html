@@ -378,14 +378,13 @@
         let pick2='—';
         if(isRevealed) pick2=rawP===DONE_PICK?'選択終了':(rawP||'（指名なし）');
         else if(isPlayerDone(pid2)) pick2='選択終了済';
-        // 再指名発表サマリーで、競合せず確定できた人も表示
+        // 再指名発表サマリーで、この巡に獲得確定済みの人（競合なし確定 or くじ勝者）をグレー表示
         const confirmedItem=isRetryReveal?roundResults[pid2]:null;
-        const isConfirmedWin=confirmedItem&&confirmedItem.winner===pid2&&confirmedItem.candidate!==DONE_PICK&&!confirmedItem.competed;
-        if(isRetryReveal&&isConfirmedWin&&!revealedPids.has(pid2)){
-          // 競合なしで確定済みの人は灰色で表示
+        const isAlreadyWon=confirmedItem&&confirmedItem.winner===pid2&&confirmedItem.candidate!==DONE_PICK;
+        if(isRetryReveal&&isAlreadyWon&&!revealedPids.has(pid2)){
           html+='<div class="summary-row">'
-            +'<span class="summary-name">'+esc(p2?.name||'')+'</span>'
-            +'<span style="color:var(--border);font-weight:400">'+esc(confirmedItem.candidate)+' ✓</span></div>';
+            +'<span class="summary-name" style="color:var(--border)">'+esc(p2?.name||'')+'</span>'
+            +'<span style="color:var(--border);font-weight:400">'+esc(confirmedItem.candidate)+'</span></div>';
           continue;
         }
         // 競合フラグ
