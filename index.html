@@ -210,9 +210,7 @@
 
     const allDone=activeOrder.every(pid=>picks[pid]!==undefined);
     const rb=document.getElementById('start-reveal-btn');
-    if(rb)rb.style.display=(isHost&&allDone&&!isRetry)?'block':'none';
-    // 再指名で全員完了→自動発表へ
-    if(isRetry&&allDone&&isHost)setTimeout(()=>startRevealForRetry(),500);
+    if(rb)rb.style.display=(isHost&&allDone)?'block':'none';
 
     const candSection=document.getElementById('cand-section');
     const retryNotice=document.getElementById('retry-notice');
@@ -290,6 +288,12 @@
       } else histEl.style.display='none';
     }
   }
+
+  window.startRevealAuto=async function(){
+    const isRetry=!!(roomData.retryPlayers&&roomData.retryPlayers.length>0);
+    if(isRetry)await startRevealForRetry();
+    else await window.startReveal();
+  };
 
   window.startReveal=async function(){
     const order=roomData.playerOrder||[];
@@ -375,18 +379,22 @@
         const p2=pl[pid2];
         const isRevealed=revealedPids.has(pid2);
         const rawP=picks[pid2];
+        // 再指名発表サマリー：この巡に獲得確定済みの人をグレー表示（再指名対象外）
+        if(isRetryReveal&&!revealedPids.has(pid2)){
+          const confirmedItem=roundResults[pid2];
+          // winner===pid2 で確定獲得、かつ再指名対象（retryPlayers）に含まれていない
+          const isAlreadyWon=confirmedItem&&confirmedItem.winner===pid2&&confirmedItem.candidate!==DONE_PICK;
+          const inRetry=(roomData.retryPlayers||[]).includes(pid2);
+          if(isAlreadyWon&&!inRetry){
+            html+='<div class="summary-row">'
+              +'<span class="summary-name" style="color:var(--border)">'+esc(p2?.name||'')+'</span>'
+              +'<span style="color:var(--border);font-weight:400">'+esc(confirmedItem.candidate)+'</span></div>';
+            continue;
+          }
+        }
         let pick2='—';
         if(isRevealed) pick2=rawP===DONE_PICK?'選択終了':(rawP||'（指名なし）');
         else if(isPlayerDone(pid2)) pick2='選択終了済';
-        // 再指名発表サマリーで、この巡に獲得確定済みの人（競合なし確定 or くじ勝者）をグレー表示
-        const confirmedItem=isRetryReveal?roundResults[pid2]:null;
-        const isAlreadyWon=confirmedItem&&confirmedItem.winner===pid2&&confirmedItem.candidate!==DONE_PICK;
-        if(isRetryReveal&&isAlreadyWon&&!revealedPids.has(pid2)){
-          html+='<div class="summary-row">'
-            +'<span class="summary-name" style="color:var(--border)">'+esc(p2?.name||'')+'</span>'
-            +'<span style="color:var(--border);font-weight:400">'+esc(confirmedItem.candidate)+'</span></div>';
-          continue;
-        }
         // 競合フラグ
         const isConflict=isRetryReveal&&isRevealed&&rawP&&conflictCands.has(rawP);
         const st=isRevealed&&rawP!==DONE_PICK?'color:var(--red);font-weight:700':'color:var(--border);font-weight:400';
@@ -857,7 +865,7 @@ textarea{min-height:120px;resize:vertical;}
     </div>
   </div>
   <div class="card"><div class="card-title">指名状況 <span class="small">（名前をタップすると獲得履歴を確認できます）</span></div><ul class="wait-list" id="pick-wait-list"></ul></div>
-  <button class="btn btn-primary" id="start-reveal-btn" onclick="startReveal()" style="display:none">全員が確定しました。発表へ</button>
+  <button class="btn btn-primary" id="start-reveal-btn" onclick="startRevealAuto()" style="display:none">全員が確定しました。発表へ</button>
 </div>
 <div id="screen-revealing" class="screen">
   <div class="reveal-header">
