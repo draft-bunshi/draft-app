@@ -29,7 +29,7 @@
   function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');}
   window.showScreen=showScreen;
   function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
-  function escA(s){return String(s||'').replace(/'/g,"\'");}
+  function escA(s){return String(s||'').replace(/'/g,"\\'");}
 
   window.goCreate=function(){showScreen('screen-create');};
   window.goJoin=function(){
@@ -91,6 +91,7 @@
       if(!snap.exists())return;
       const prev=roomData;
       roomData=snap.val();
+      // フェーズや巡や再指名対象が変わったらローカル選択リセット
       const prevRetry=(prev?.retryPlayers||[]).slice().sort().join();
       const curRetry=(roomData.retryPlayers||[]).slice().sort().join();
       if(!prev||prev.phase!==roomData.phase||prev.currentRound!==roomData.currentRound||prevRetry!==curRetry){
@@ -197,17 +198,20 @@
     // 自分が今回指名対象か
     const amIActive=activeOrder.includes(myPlayerId);
 
-    // 指名状況表示
-    document.getElementById('pick-wait-list').innerHTML=activeOrder.map(pid=>{
+    // 指名状況表示：再指名中は全員表示（アクティブ以外はグレー）
+    const displayOrder=isRetry?order:activeOrder;
+    document.getElementById('pick-wait-list').innerHTML=displayOrder.map(pid=>{
       const p=pl[pid];const done=picks[pid]!==undefined;const isMe=pid===myPlayerId;
-      return '<li class="'+(done?'done':'waiting')+'">'
-        +'<span class="player-name-btn'+(isMe?' me':'')+'" onclick="showPlayerHistory(''+pid+'')">'+esc(p.name)+'</span>'
-        +' '+(done?'':'')+'</li>';
+      const inactive=isRetry&&!activeOrder.includes(pid);
+      return '<li class="'+(inactive?'waiting':(done?'done':'waiting'))+'" style="'+(inactive?'opacity:.4;':'')+'\">'
+        +'<span class="player-name-btn'+(isMe?' me':'')+'" onclick="showPlayerHistory(\''+pid+'\')">'+esc(p.name)+'</span>'
+        +' '+(done&&!inactive?'✓':'')+'</li>';
     }).join('');
 
     const allDone=activeOrder.every(pid=>picks[pid]!==undefined);
     const rb=document.getElementById('start-reveal-btn');
     if(rb)rb.style.display=(isHost&&allDone&&!isRetry)?'block':'none';
+    // 再指名で全員完了→自動発表へ
     if(isRetry&&allDone&&isHost)setTimeout(()=>startRevealForRetry(),500);
 
     const candSection=document.getElementById('cand-section');
@@ -218,10 +222,28 @@
       if(retryNotice){
         retryNotice.style.display='block';
         retryNotice.textContent=isPlayerDone(myPlayerId)
-          ?'あなたは選択終了しています'
-          :'待機中… （'+activeOrder.map(pid=>pl[pid]?.name||pid).join('、')+'が選択中です）';
+          ?'あなたは選択終了しています。'
+          :'待機中です。（'+activeOrder.map(pid=>pl[pid]?.name||pid).join('、')+'が選択中）';
       }
       document.getElementById('pick-my-pick').textContent='今回はあなたの番ではありません。';
+      // 全プレイヤーの獲得リストを表示
+      {
+        const allAcqLines=[];
+        for(const pid2 of (roomData.playerOrder||[])){
+          const items=[];
+          for(const[rnd,rr]of Object.entries(roomData.results||{}))
+            for(const[rpid,item]of Object.entries(rr))
+              if(rpid===pid2&&item.winner===pid2&&item.candidate!==DONE_PICK)
+                items.push(item.candidate);
+          allAcqLines.push({name:pl[pid2]?.name||pid2,items,isMe:pid2===myPlayerId});
+        }
+        const histEl=document.getElementById('pick-history');
+        if(histEl){
+          histEl.style.display='block';
+          histEl.innerHTML='<div class="history-title">全員の獲得状況</div>'
+            +allAcqLines.map(x=>'<div class="history-item"><strong'+(x.isMe?' style="color:var(--red)"':'')+'>'+esc(x.name)+'</strong>：'+(x.items.length?x.items.map(esc).join('、'):'まだ獲得なし')+'</div>').join('');
+        }
+      }
     } else {
       if(retryNotice)retryNotice.style.display='none';
       if(candSection)candSection.style.display='block';
@@ -239,12 +261,10 @@
         let html='';
         cands.forEach(c=>{
           html+='<li><label class="cand-label"><input type="checkbox" class="cand-checkbox" data-val="'+esc(c)+'" '
-            +(localSelected===c?'checked':'')+' onchange="selectOption(''+escA(c)+'')"> '+esc(c)+'</label></li>';
+            +(localSelected===c?'checked':'')+' onchange="selectOption(\''+escA(c)+'\')"> '+esc(c)+'</label></li>';
         });
-        // はずれのとき（再指名時）の選択肢にも選択終了を追加
         html+='<li><label class="cand-label done-label"><input type="checkbox" class="cand-checkbox" data-val="'+DONE_PICK+'" '
-          +(localSelected===DONE_PICK?'checked':'')+' onchange="selectOption(''+DONE_PICK+'')"> 選択終了（以降の巡もスキップ）</label></li>';
-        
+          +(localSelected===DONE_PICK?'checked':'')+' onchange="selectOption(\''+DONE_PICK+'\')"> 選択終了（以降の巡もスキップ）</label></li>';
         document.getElementById('pick-candidates').innerHTML=html;
         const btn=document.getElementById('confirm-btn');
         if(btn){
@@ -255,30 +275,7 @@
       }
     }
 
-    // 他の人が獲得したリスト（全体獲得履歴）を常時表示するエリアのレンダリング
-    let globalHistoryHtml = '';
-    const results = roomData.results || {};
-    const globalLines = [];
-    for(const [rnd, rr] of Object.entries(results)){
-      for(const [rpid, item] of Object.entries(rr)){
-        if(item.winner === rpid && item.candidate !== DONE_PICK){
-          globalLines.push({ round: rnd, name: pl[rpid]?.name || '?', candidate: item.candidate });
-        }
-      }
-    }
-    const globalHistEl = document.getElementById('global-history-box');
-    if(globalHistEl){
-      if(globalLines.length > 0){
-        globalHistEl.style.display = 'block';
-        globalHistoryHtml = '<div class="history-title">現在の獲得確定リスト（全員分）</div>' +
-          globalLines.map(l => '<div class="global-history-item"><span class="gh-round">第'+l.round+'巡</span><span class="gh-name">'+esc(l.name)+'</span><span class="gh-cand">'+esc(l.candidate)+'</span></div>').join('');
-        globalHistEl.innerHTML = globalHistoryHtml;
-      } else {
-        globalHistEl.style.display = 'none';
-      }
-    }
-
-    // 自分の獲得履歴
+    // 獲得履歴
     const historyLines=[];
     for(const[rnd,rr]of Object.entries(roomData.results||{}))
       for(const[rpid,item]of Object.entries(rr))
@@ -317,7 +314,6 @@
     const queue=roomData.revealQueue||[];
     const qIdx=roomData.revealQueueIndex||0;
     const subStep=roomData.revealSubStep||0;
-    const results=(roomData.results||{})[round]||{};
 
     document.getElementById('reveal-theme').textContent=roomData.theme;
     const nextBtn=document.getElementById('next-reveal-btn');
@@ -366,31 +362,36 @@
       document.getElementById('reveal-summary-title').textContent=
         isRetryReveal?'第'+round+'巡　再指名の結果':'第'+round+'巡　ここまでの結果';
       const revealedPids=new Set(queue.slice(0,qIdx+1).map(q=>q.pid));
+      // 現在の巡の確定済み結果（競合判定後）
+      const roundResults=(roomData.results||{})[round]||{};
+      // 競合した候補を収集（retryPlayersに含まれていた人が取った候補）
+      const conflictCands=new Set();
+      if(isRetryReveal){
+        for(const[pid2,item]of Object.entries(roundResults))
+          if(item&&item.competed)conflictCands.add(item.candidate);
+      }
       let html='';
       for(const pid2 of order){
         const p2=pl[pid2];
         const isRevealed=revealedPids.has(pid2);
         const rawP=picks[pid2];
-        const item=results[pid2];
-        
         let pick2='—';
-
-        if(isRetryReveal){
-          // 再指名結果表示の時は、競合せず一本釣りでとることができた（前のステップで確定した）人の結果も表示
-          if(item && item.winner===pid2 && !item.competed && item.candidate!==DONE_PICK){
-            pick2 = esc(item.candidate) + ' (確定)';
-          } else if(isRevealed){
-            pick2=rawP===DONE_PICK?'選択終了':(rawP||'（指名なし）');
-          } else if(isPlayerDone(pid2)){
-            pick2='選択終了';
-          }
-        } else {
-          if(isRevealed) pick2=rawP===DONE_PICK?'選択終了':(rawP||'（指名なし）');
-          else if(isPlayerDone(pid2)) pick2='';
+        if(isRevealed) pick2=rawP===DONE_PICK?'選択終了':(rawP||'（指名なし）');
+        else if(isPlayerDone(pid2)) pick2='選択終了済';
+        // 再指名発表サマリーで、競合せず確定できた人も表示
+        const confirmedItem=isRetryReveal?roundResults[pid2]:null;
+        const isConfirmedWin=confirmedItem&&confirmedItem.winner===pid2&&confirmedItem.candidate!==DONE_PICK&&!confirmedItem.competed;
+        if(isRetryReveal&&isConfirmedWin&&!revealedPids.has(pid2)){
+          // 競合なしで確定済みの人は灰色で表示
+          html+='<div class="summary-row">'
+            +'<span class="summary-name">'+esc(p2?.name||'')+'</span>'
+            +'<span style="color:var(--border);font-weight:400">'+esc(confirmedItem.candidate)+' ✓</span></div>';
+          continue;
         }
-
+        // 競合フラグ
+        const isConflict=isRetryReveal&&isRevealed&&rawP&&conflictCands.has(rawP);
         const st=isRevealed&&rawP!==DONE_PICK?'color:var(--red);font-weight:700':'color:var(--border);font-weight:400';
-        html+='<div class="summary-row'+(isRevealed?'':' not-yet')+'">'
+        html+='<div class="summary-row'+(isRevealed?'':' not-yet')+(isConflict?' summary-conflict':'')+'">'
           +'<span class="summary-name">'+esc(p2?.name||'')+'</span>'
           +'<span style="'+st+'">'+esc(pick2)+'</span></div>';
       }
@@ -441,10 +442,13 @@
       return;
     }
 
+    // 競合した候補名を保存（ハイライト用）
+    const conflictCandidates=conflictGroups.map(g=>g.candidate);
     if(conflictGroups.length===0){
-      await update(getRoomRef(),{phase:'round_summary',retryPlayers:null,roundSummaryRound:round});
+      await update(getRoomRef(),{phase:'round_summary',retryPlayers:null,roundSummaryRound:round,conflictCandidates:[]});
     } else {
       const allConflict=[...new Set(conflictGroups.flatMap(g=>g.pids))];
+      // 引く順番をランダムシャッフル
       const shuffledOrder=allConflict.slice();
       for(let j=shuffledOrder.length-1;j>0;j--){
         const k=Math.floor(Math.random()*(j+1));
@@ -453,7 +457,10 @@
       const lotteryGroups=conflictGroups.map(g=>{
         const winnerIdx=Math.floor(Math.random()*g.pids.length);
         const winner=g.pids[winnerIdx];
-        const envelopes=g.pids.map((pid,i)=>({pid,isWinner:i===winnerIdx}));
+        // 封筒をランダムシャッフル（当たり位置も毎回変わる）
+        const envelopes=g.pids.map((pid,i)=>({pid,isWinner:i===winnerIdx}))
+          ;
+        // Fisher-Yatesシャッフル（真のランダム）
         for(let j=envelopes.length-1;j>0;j--){
           const k=Math.floor(Math.random()*(j+1));
           [envelopes[j],envelopes[k]]=[envelopes[k],envelopes[j]];
@@ -483,22 +490,18 @@
     const pl=roomData.players||{};
     const order=roomData.playerOrder||[];
     const roundResults=(roomData.results||{})[round]||{};
+    const conflictCandidates=roomData.conflictCandidates||[];
     document.getElementById('rs-title').textContent='第'+round+'巡　確定結果';
     let html='';
     for(const pid of order){
       const p=pl[pid];const item=roundResults[pid];
       const won=item&&item.winner===pid&&item.candidate!==DONE_PICK;
       const isDone=item&&item.candidate===DONE_PICK;
-      
-      // 競合（くじ引き）があったもののみハイライトするクラスを付与
-      let highlightClass = '';
-      if(item && item.competed){
-        highlightClass = won ? ' hl-winner' : ' hl-loser';
-      }
-
-      html+='<div class="rs-row'+(won?'':' rs-pending')+highlightClass+'">'
+      const isConflict=won&&item.competed===true;
+      const pickText=won?esc(item.candidate):(isDone?'選択終了':'—');
+      html+='<div class="rs-row'+(won?'':' rs-pending')+(isConflict?' rs-conflict':'')+'">'
         +'<span class="rs-name">'+esc(p?.name||'')+'</span>'
-        +'<span class="rs-pick">'+(won?esc(item.candidate):(isDone?'選択終了':'—'))+'</span></div>';
+        +'<span class="rs-pick">'+(isConflict?'<span class="rs-conflict-badge">競合</span>':'')+pickText+'</span></div>';
     }
     document.getElementById('rs-list').innerHTML=html;
     const nextBtn=document.getElementById('rs-next-btn');
@@ -520,10 +523,8 @@
     const pickOrder=roomData.lotteryPickOrder||[];
     const pickIndex=roomData.lotteryPickIndex||0;
     const revealed=roomData.lotteryRevealed||false;
-    
-    // 「！」を除去した表現に変更
     document.getElementById('lp-title').textContent=
-      '「'+groups.map(g=>g.candidate).join('・')+'」競合：封筒くじ引き';
+      '「'+groups.map(g=>g.candidate).join('・')+'」競合　封筒くじ引き';
     const allChosen=groups.every(g=>Object.keys(g.chosen||{}).length===g.pids.length);
     if(revealed){renderEnvelopeResult(groups,pl);return;}
     if(allChosen){
@@ -535,27 +536,24 @@
     }
     const currentPid=pickOrder[pickIndex];
     const isMyTurn=currentPid===myPlayerId;
-    
-    // 「！」を除去した表現に変更
     document.getElementById('lp-status').textContent=
-      isMyTurn?'あなたが封筒を選ぶ番です':(pl[currentPid]?.name||'?')+'が選んでいます...';
+      isMyTurn?'あなたが封筒を選ぶ番です！':(pl[currentPid]?.name||'?')+'が選んでいます...';
     document.getElementById('lp-reveal-btn').style.display='none';
     document.getElementById('lp-next-btn').style.display='none';
     let html='';
     for(const group of groups){
       const chosen=group.chosen||{};const alreadyChosen=chosen[currentPid]!==undefined;
-      html+='<div class="lp-group"><div class="lp-group-cand">「'+esc(group.candidate)+'」の封筒</div><div class="lp-envelopes-grid">';
+      html+='<div class="lp-group"><div class="lp-group-cand">「'+esc(group.candidate)+'」の封筒</div><div class="lp-envelopes-row">';
       for(let i=0;i<group.envelopes.length;i++){
         const takenBy=Object.entries(chosen).find(([,v])=>Number(v)===i);
         const isTaken=!!takenBy;const isMyChoice=takenBy&&takenBy[0]===myPlayerId;
         if(isTaken){
-          html+='<div class="envelope taken'+(isMyChoice?' mine':'')+'"><div class="env-icon">✉️</div>'
-            +'<div class="env-label">'+(isMyChoice?'あなた':esc(pl[takenBy[0]]?.name||'?'))+'</div></div>';
+          html+='<div class="envelope taken'+(isMyChoice?' mine':'')+'"><div class="env-label">'+(isMyChoice?'あなた':esc(pl[takenBy[0]]?.name||'?'))+'</div></div>';
         } else if(isMyTurn&&!alreadyChosen){
-          html+='<div class="envelope pickable" onclick="pickEnvelope(''+escA(group.candidate)+'','+i+')">'
-            +'<div class="env-icon">✉️</div><div class="env-label">選ぶ</div></div>';
+          html+='<div class="envelope pickable" onclick="pickEnvelope(\''+escA(group.candidate)+'\','+i+')">'
+            +'<div class="env-label">選ぶ</div></div>';
         } else {
-          html+='<div class="envelope waiting"><div class="env-icon">✉️</div><div class="env-label">-</div></div>';
+          html+='<div class="envelope waiting"><div class="env-label">-</div></div>';
         }
       }
       html+='</div></div>';
@@ -577,30 +575,25 @@
   };
 
   function renderEnvelopeResult(groups,pl){
-    let html='<div class="lp-result-title">開封</div>';
+    let html='<div class="lp-result-title">開封！</div>';
     for(const group of groups){
       const chosen=group.chosen||{};
-      html+='<div class="lp-result-group"><div class="lp-group-cand">「'+esc(group.candidate)+'」</div><div class="lp-envelopes-grid">';
+      html+='<div class="lp-result-group"><div class="lp-group-cand">「'+esc(group.candidate)+'」</div><div class="lp-envelopes-row">';
       for(let i=0;i<group.envelopes.length;i++){
         const env=group.envelopes[i];
         const takenBy=Object.entries(chosen).find(([,v])=>Number(v)===i);
         const playerName=takenBy?esc(pl[takenBy[0]]?.name||'?'):'?';
+        // 当たり判定：この封筒を選んだ人が winner かどうか
         const isWon=takenBy&&takenBy[0]===group.winner;
-        
-        // あたりはずれ表記の変更（あたり：赤文字「あたり」、はずれ：白紙）
-        if(isWon){
-          html+='<div class="envelope revealed winner">'
-            +'<div class="env-paper-winner">あたり</div>'
-            +'<div class="env-label-bottom">'+playerName+'</div></div>';
-        } else {
-          html+='<div class="envelope revealed loser">'
-            +'<div class="env-paper-loser"></div>'
-            +'<div class="env-label-bottom">'+playerName+'</div></div>';
-        }
+        html+='<div class="envelope revealed '+(isWon?'env-winner':'env-loser')+'">'
+          +(isWon
+            ?'<div class="env-atari">あたり</div>'
+            :'<div class="env-blank"></div>')
+          +'<div class="env-playername">'+playerName+'</div></div>';
       }
-      html+='</div><div class="lp-winner-announce">'+esc(pl[group.winner]?.name||'?')+' が「'+esc(group.candidate)+'」を獲得</div>';
+      html+='</div><div class="lp-winner-announce">'+esc(pl[group.winner]?.name||'?')+' が「'+esc(group.candidate)+'」を獲得しました。</div>';
       const losers=group.pids.filter(p=>p!==group.winner).map(p=>pl[p]?.name||p);
-      if(losers.length)html+='<div class="lp-losers">落選：'+losers.map(esc).join('、')+' → 再指名へ</div>';
+      if(losers.length)html+='<div class="lp-losers">外れ：'+losers.map(esc).join('、')+' → 再指名へ</div>';
       html+='</div>';
     }
     document.getElementById('lp-envelopes').innerHTML=html;
@@ -611,6 +604,7 @@
 
   window.revealEnvelopes=async function(){await update(getRoomRef(),{lotteryRevealed:true});};
 
+  // くじ引き結果後 → 外れた人を再指名（picking）へ直接移行
   window.lotteryPickNext=async function(){
     const round=roomData.currentRound;
     const groups=roomData.lotteryGroups||[];
@@ -621,6 +615,7 @@
       const winner=group.winner;
       for(const pid of group.pids)
         roundResults[pid]={candidate:group.candidate,winner,competed:true};
+      // 外れた人は全員再指名（選択終了に関係なく）
       group.pids.filter(p=>p!==winner).forEach(p=>retryList.push(p));
     }
     await update(getRoomRef(),{['results/'+round]:roundResults});
@@ -633,6 +628,7 @@
     }
 
     if(retryList.length>0){
+      // 外れた人のpicksをクリアして再指名画面（picking）へ
       const clearUpdates={};
       for(const pid of retryList)clearUpdates['picks/'+round+'/'+pid]=null;
       await update(getRoomRef(),clearUpdates);
@@ -737,16 +733,9 @@ textarea{min-height:120px;resize:vertical;}
 .done-label{border-style:dashed;color:var(--border);}
 .confirmed-pick{padding:14px;background:#e8f5e9;border:2px solid #27ae60;border-radius:4px;font-weight:700;font-size:1.1rem;text-align:center;color:#27ae60;}
 .my-pick-display{background:var(--paper2);border-left:4px solid var(--red);padding:10px 14px;margin:14px 0;font-weight:700;}
-
-/* 獲得履歴表示用スタイル */
 .history-box{background:#fff8ee;border:1px solid var(--border);border-radius:4px;padding:14px;margin-bottom:14px;display:none;}
-.history-title{font-size:.82rem;color:var(--border);font-weight:700;margin-bottom:8px;border-bottom:1px solid var(--paper2);padding-bottom:4px;}
+.history-title{font-size:.82rem;color:var(--border);font-weight:700;margin-bottom:8px;}
 .history-item{font-size:.95rem;padding:4px 0;border-bottom:1px dotted var(--paper2);}
-.global-history-item{display:flex;gap:12px;font-size:.9rem;padding:6px 0;border-bottom:1px dotted var(--paper2);}
-.gh-round{color:var(--border);font-size:.8rem;width:45px;}
-.gh-name{font-weight:700;width:80px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.gh-cand{color:var(--red);font-weight:700;}
-
 .retry-notice{background:#fff3cd;border:1.5px solid var(--gold);border-radius:4px;padding:10px 14px;margin-bottom:14px;font-size:.9rem;font-weight:700;color:#856404;display:none;}
 #screen-revealing{max-width:100%;padding:0;}
 .reveal-header{text-align:center;padding:16px;background:var(--ink);color:var(--paper);}
@@ -763,97 +752,41 @@ textarea{min-height:120px;resize:vertical;}
 .summary-title{font-size:1.2rem;font-weight:900;color:var(--red);margin-bottom:16px;text-align:center;border-bottom:2px solid var(--border);padding-bottom:10px;}
 .summary-row{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--paper2);font-size:1rem;}
 .summary-row.not-yet{opacity:.4;}
+.summary-row.summary-conflict{background:#fff8ee;border-left:3px solid var(--red);}
 .summary-name{font-weight:700;}
-#reveal-done-msg{text-align:center;padding:40px 24px;font-size:1.1rem;font-weight:700;}
-
+#reveal-done-msg{display:none;text-align:center;padding:40px 24px;font-size:1.1rem;font-weight:700;}
 #screen-round-summary{max-width:680px;margin:0 auto;padding:24px 16px 60px;}
 .rs-header{text-align:center;padding:20px 0 16px;border-bottom:3px double var(--border);margin-bottom:28px;}
 .rs-title-text{font-size:1.8rem;font-weight:900;color:var(--red);letter-spacing:.1em;}
 .rs-row{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--paper2);font-size:1.05rem;}
 .rs-row.rs-pending{opacity:.4;}
+.rs-row.rs-conflict{background:#fff8ee;border-left:4px solid var(--red);}
 .rs-name{font-weight:700;}.rs-pick{color:var(--red);font-weight:700;font-size:1.1rem;}
-
-/* 競合（くじ引き結果）のハイライト表示 */
-.rs-row.hl-winner { background-color: #ffeaea; border-left: 4px solid var(--red); }
-.rs-row.hl-loser { background-color: #f2f2f2; border-left: 4px solid #777; }
-
-/* 封筒くじ引きレイアウト調整（最高12人が並んでも破綻しないグリッドレイアウト） */
+.rs-conflict-badge{display:inline-block;background:var(--red);color:#fff;font-size:.65rem;font-weight:700;padding:1px 6px;border-radius:2px;margin-right:6px;vertical-align:middle;}
 #screen-lottery-pick{background:var(--paper);}
 .lp-header{text-align:center;background:var(--ink);color:var(--paper);padding:16px 20px;font-size:1.1rem;font-weight:900;}
 #lp-status{text-align:center;font-size:1rem;font-weight:700;padding:14px;color:var(--red);min-height:48px;}
-.lp-group{margin-bottom:24px; padding:0 10px;}
-.lp-group-cand{text-align:center;font-size:.9rem;color:var(--border);margin-bottom:12px;font-weight:700;}
-
-/* 最大12人が綺麗に折り返して整列するグリッド（1型あたりを少し大きめ・綺麗に維持） */
-.lp-envelopes-grid{
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
-  gap: 12px;
-  justify-content: center;
-  max-width: 100%;
-}
-
-.envelope{
-  background: #fff8ee;
-  border: 1.5px solid var(--border);
-  border-radius: 4px;
-  padding: 12px 4px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 120px;
-  box-shadow: 2px 2px 0 var(--shadow);
-  transition: transform .15s, background-color .2s;
-}
-.envelope .env-icon{font-size:2rem; margin-bottom: 4px;}
-.envelope .env-label{font-size:.75rem;font-weight:700;text-align:center;}
-.envelope .env-label-bottom{font-size:.72rem;color:var(--ink);margin-top:auto;text-align:center;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-
-.envelope.pickable{border:2px solid var(--gold);cursor:pointer;background:#fffcf5;}
-.envelope.pickable:hover{transform:translateY(-4px); background:#fff8e3;}
-.envelope.taken{background:var(--paper2);border-color:var(--border);}
+.lp-group{margin-bottom:24px;}
+.lp-group-cand{text-align:center;font-size:.9rem;color:var(--border);margin-bottom:10px;font-weight:700;}
+.lp-envelopes-row{display:flex;justify-content:center;gap:clamp(3px,0.8vw,8px);flex-wrap:nowrap;overflow-x:auto;padding:8px 4px;}
+.envelope{width:clamp(52px,calc((min(100vw,680px) - 80px) / 12),68px);height:clamp(80px,calc((min(100vw,680px) - 80px) / 12 * 1.6),108px);border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;transition:transform .2s;flex-shrink:0;position:relative;}
+.envelope .env-icon{font-size:clamp(.85rem,2.5vw,1.5rem);}
+.envelope .env-label{font-size:clamp(.48rem,1.3vw,.65rem);font-weight:700;text-align:center;word-break:break-all;line-height:1.2;max-width:100%;padding:0 2px;}
+.envelope.pickable{background:#fff8ee;border:2px solid var(--gold);cursor:pointer;box-shadow:0 3px 10px rgba(0,0,0,0.18);}
+.envelope.pickable:hover{transform:translateY(-5px);}
+.envelope.taken{background:var(--paper2);border:1.5px solid var(--border);}
 .envelope.taken.mine{border-color:var(--red);background:#ffe8e8;}
-.envelope.waiting{background:var(--paper2);border:1px dashed var(--border);opacity:.5;}
-
-/* あたりはずれの紙の演出用デザイン */
-.envelope.revealed{transform: scale(1.02); box-shadow: 3px 3px 6px var(--shadow); justify-content: flex-start;}
-.envelope.revealed.winner{
-  background: #fff;
-  border: 2.5px solid var(--red);
-}
-.envelope.revealed.loser{
-  background: #f7f7f7;
-  border: 1.5px solid #bbb;
-}
-/* あたり：白い紙に赤文字で「あたり」 */
-.env-paper-winner {
-  background: #ffffff;
-  color: var(--red);
-  font-weight: 900;
-  font-size: 1.15rem;
-  border: 1px solid var(--red);
-  padding: 14px 4px;
-  width: 90%;
-  text-align: center;
-  box-shadow: inset 0 0 4px rgba(192,57,43,0.15);
-  letter-spacing: 2px;
-  margin-bottom: 6px;
-}
-/* はずれ：完全な白紙 */
-.env-paper-loser {
-  background: #ffffff;
-  border: 1px solid #ccc;
-  padding: 14px 4px;
-  width: 90%;
-  height: 54px;
-  margin-bottom: 6px;
-}
-
+.envelope.waiting{background:var(--paper2);border:1.5px dashed var(--border);opacity:.5;}
+.envelope.revealed{border-radius:3px;box-shadow:2px 2px 6px var(--shadow);flex-direction:column;justify-content:space-between;padding:6px 4px;}
+.envelope.env-winner{background:var(--red);border:2px solid #8b0000;color:#fff;}
+.envelope.env-loser{background:#fff;border:1.5px solid var(--border);}
+.env-atari{color:#fff;font-weight:900;font-size:clamp(.8rem,2.4vw,1.1rem);letter-spacing:.02em;line-height:1;text-align:center;padding-top:6px;}
+.env-blank{flex:1;}
+.env-playername{font-size:clamp(.42rem,1.1vw,.6rem);font-weight:700;text-align:center;word-break:break-all;line-height:1.2;max-width:100%;padding:0 2px;color:var(--border);padding-bottom:4px;}
 .lp-all-chosen{text-align:center;font-size:1.1rem;font-weight:700;color:var(--accent);padding:20px;}
 .lp-result-title{text-align:center;font-size:1.4rem;font-weight:900;color:var(--red);padding:16px;border-bottom:2px solid var(--border);margin-bottom:20px;}
 .lp-result-group{margin-bottom:24px;}
-.lp-winner-announce{text-align:center;font-size:1.1rem;font-weight:700;color:var(--red);margin:16px 0 4px;}
+.lp-winner-announce{text-align:center;font-size:1.1rem;font-weight:700;color:var(--red);margin:12px 0 4px;}
 .lp-losers{text-align:center;font-size:.85rem;color:var(--border);}
 .results-grid{display:grid;gap:16px;}
 .result-card{background:#fff8ee;border:1.5px solid var(--border);border-radius:4px;padding:16px;box-shadow:2px 2px 0 var(--shadow);}
@@ -916,10 +849,6 @@ textarea{min-height:120px;resize:vertical;}
   <span class="phase-badge" style="display:inline-block;background:var(--red);color:#fff;font-size:.75rem;font-weight:700;padding:3px 10px;border-radius:2px;margin-bottom:10px;">指名中</span>
   <div class="retry-notice" id="retry-notice"></div>
   <div class="my-pick-display" id="pick-my-pick">候補を選択し、確定ボタンを押してください。</div>
-  
-  <!-- 再指名中も確認できる全員の獲得リストエリア -->
-  <div class="history-box" id="global-history-box" style="background:#fcf8f2; border:1.5px solid var(--accent);"></div>
-  
   <div class="history-box" id="pick-history"></div>
   <div id="cand-section">
     <div class="card">
