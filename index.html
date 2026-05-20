@@ -20,8 +20,7 @@
   const db = getDatabase(app);
   let roomId=null,myPlayerId=null,myPlayerName=null,isHost=false,roomData=null,unsubscribe=null;
   let localSelected=null;
-
-  const DONE_PICK = '__DONE__'; // 選択終了マーカー
+  const DONE_PICK='__DONE__';
 
   function generateId(len=6){return Math.random().toString(36).substring(2,2+len).toUpperCase();}
   function getRoomRef(path=''){return ref(db,'rooms/'+roomId+path);}
@@ -33,7 +32,12 @@
   function escA(s){return String(s||'').replace(/'/g,"\\'");}
 
   window.goCreate=function(){showScreen('screen-create');};
-  window.goJoin=function(){const p=new URLSearchParams(window.location.search);const r=p.get('room');if(r)document.getElementById('join-room-id').value=r;showScreen('screen-join');};
+  window.goJoin=function(){
+    const p=new URLSearchParams(window.location.search);
+    const r=p.get('room');
+    if(r)document.getElementById('join-room-id').value=r;
+    showScreen('screen-join');
+  };
 
   window.createRoom=async function(){
     const theme=document.getElementById('create-theme').value.trim();
@@ -43,7 +47,9 @@
     const candidates=cRaw.split('\n').map(s=>s.trim()).filter(Boolean);
     if(candidates.length<2){alert('候補を2つ以上入力してください');return;}
     roomId=generateId(6);myPlayerId=generateId(8);myPlayerName=hName;isHost=true;savePlayerId(myPlayerId);
-    await set(getRoomRef(),{theme,candidates,currentRound:1,phase:'lobby',players:{[myPlayerId]:{name:hName,isHost:true,joinedAt:Date.now()}},picks:{},results:{},donePlayers:[],createdAt:Date.now()});
+    await set(getRoomRef(),{theme,candidates,currentRound:1,phase:'lobby',
+      players:{[myPlayerId]:{name:hName,isHost:true,joinedAt:Date.now()}},
+      picks:{},results:{},donePlayers:[],createdAt:Date.now()});
     startListening();showScreen('screen-lobby');updateShareUrl();
   };
 
@@ -56,14 +62,28 @@
     if(!snap.exists()){alert('ルームが見つかりません');return;}
     const data=snap.val();
     let pid=loadPlayerId();
-    if(pid&&data.players&&data.players[pid]){myPlayerId=pid;myPlayerName=data.players[pid].name;isHost=data.players[pid].isHost||false;}
-    else if(data.phase==='lobby'){myPlayerId=generateId(8);myPlayerName=name;isHost=false;savePlayerId(myPlayerId);await update(ref(db,'rooms/'+roomId+'/players/'+myPlayerId),{name,isHost:false,joinedAt:Date.now()});}
-    else{alert('ゲームが既に始まっています');return;}
+    if(pid&&data.players&&data.players[pid]){
+      myPlayerId=pid;myPlayerName=data.players[pid].name;isHost=data.players[pid].isHost||false;
+    } else if(data.phase==='lobby'){
+      myPlayerId=generateId(8);myPlayerName=name;isHost=false;savePlayerId(myPlayerId);
+      await update(ref(db,'rooms/'+roomId+'/players/'+myPlayerId),{name,isHost:false,joinedAt:Date.now()});
+    } else {alert('ゲームが既に始まっています');return;}
     startListening();showScreen('screen-lobby');updateShareUrl();
   };
 
-  function updateShareUrl(){const url=location.origin+location.pathname+'?room='+roomId;const el=document.getElementById('share-url');if(el)el.textContent=url;}
-  window.copyShareUrl=function(){const url=location.origin+location.pathname+'?room='+roomId;navigator.clipboard.writeText(url).then(()=>{const b=document.getElementById('copy-btn');b.textContent='コピーしました！';setTimeout(()=>b.textContent='URLをコピー',2000);});};
+  function updateShareUrl(){
+    const url=location.origin+location.pathname+'?room='+roomId;
+    const el=document.getElementById('share-url');
+    if(el)el.textContent=url;
+  }
+  window.copyShareUrl=function(){
+    const url=location.origin+location.pathname+'?room='+roomId;
+    navigator.clipboard.writeText(url).then(()=>{
+      const b=document.getElementById('copy-btn');
+      b.textContent='コピーしました！';
+      setTimeout(()=>b.textContent='URLをコピー',2000);
+    });
+  };
 
   function startListening(){
     if(unsubscribe)unsubscribe();
@@ -71,7 +91,12 @@
       if(!snap.exists())return;
       const prev=roomData;
       roomData=snap.val();
-      if(!prev||prev.phase!==roomData.phase||prev.currentRound!==roomData.currentRound){localSelected=null;}
+      // フェーズや巡や再指名対象が変わったらローカル選択リセット
+      const prevRetry=(prev?.retryPlayers||[]).slice().sort().join();
+      const curRetry=(roomData.retryPlayers||[]).slice().sort().join();
+      if(!prev||prev.phase!==roomData.phase||prev.currentRound!==roomData.currentRound||prevRetry!==curRetry){
+        localSelected=null;
+      }
       renderCurrentState();
     });
   }
@@ -94,41 +119,41 @@
     document.getElementById('lobby-room-id').textContent=roomId;
     updateShareUrl();
     const pl=roomData.players||{};
-    document.getElementById('lobby-players').innerHTML=Object.values(pl).sort((a,b)=>a.joinedAt-b.joinedAt).map(p=>'<li>'+(p.isHost?'👑 ':'')+esc(p.name)+'</li>').join('');
+    document.getElementById('lobby-players').innerHTML=Object.values(pl)
+      .sort((a,b)=>a.joinedAt-b.joinedAt)
+      .map(p=>'<li>'+(p.isHost?'👑 ':'')+esc(p.name)+'</li>').join('');
     const sb=document.getElementById('start-btn');
     if(sb)sb.style.display=isHost?'block':'none';
   }
+
   window.startGame=async function(){
     const pl=roomData.players||{};
     if(!Object.keys(pl).length){alert('参加者が必要です');return;}
     const order=Object.keys(pl).sort((a,b)=>pl[a].joinedAt-pl[b].joinedAt);
-    await update(getRoomRef(),{phase:'picking',playerOrder:order,currentRound:1,picks:{},results:{},retryPlayers:null,revealQueue:null,donePlayers:[]});
+    await update(getRoomRef(),{phase:'picking',playerOrder:order,currentRound:1,
+      picks:{},results:{},retryPlayers:null,revealQueue:null,donePlayers:[]});
   };
 
   // ===== 指名 =====
   function getUsed(){
     const used=new Set();
     const r=roomData.results||{};
-    for(const rnd of Object.values(r))for(const item of Object.values(rnd))if(item.winner&&item.candidate!==DONE_PICK)used.add(item.candidate);
+    for(const rnd of Object.values(r))
+      for(const item of Object.values(rnd))
+        if(item.winner&&item.candidate!==DONE_PICK)used.add(item.candidate);
     return used;
   }
 
-  // 選択終了済みかどうか
-  function isPlayerDone(pid){
-    const donePlayers=roomData.donePlayers||[];
-    return donePlayers.includes(pid);
-  }
+  function isPlayerDone(pid){return (roomData.donePlayers||[]).includes(pid);}
 
   window.showPlayerHistory=function(pid){
     const pl=roomData.players||{};const p=pl[pid];if(!p)return;
-    const allResults=roomData.results||{};
     const lines=[];
-    for(const[rnd,rr]of Object.entries(allResults)){
-      for(const[rpid,item]of Object.entries(rr)){
-        if(rpid===pid&&item.winner===pid&&item.candidate!==DONE_PICK)lines.push('第'+rnd+'巡：'+item.candidate);
-      }
-    }
-    alert(p.name+'の獲得履歴\n\n'+(lines.length>0?lines.join('\n'):'まだ獲得なし'));
+    for(const[rnd,rr]of Object.entries(roomData.results||{}))
+      for(const[rpid,item]of Object.entries(rr))
+        if(rpid===pid&&item.winner===pid&&item.candidate!==DONE_PICK)
+          lines.push('第'+rnd+'巡：'+item.candidate);
+    alert(p.name+'の獲得履歴\n\n'+(lines.length?lines.join('\n'):'まだ獲得なし'));
   };
 
   window.selectOption=function(val){
@@ -141,14 +166,11 @@
   window.confirmPick=async function(){
     if(localSelected===null){alert('候補を選んでください');return;}
     const round=roomData.currentRound;
-    const value=localSelected===DONE_PICK?DONE_PICK:localSelected;
-    await set(ref(db,'rooms/'+roomId+'/picks/'+round+'/'+myPlayerId),value);
-    // 選択終了なら donePlayers に追加
-    if(value===DONE_PICK){
-      const donePlayers=roomData.donePlayers||[];
-      if(!donePlayers.includes(myPlayerId)){
-        await update(getRoomRef(),{donePlayers:[...donePlayers,myPlayerId]});
-      }
+    await set(ref(db,'rooms/'+roomId+'/picks/'+round+'/'+myPlayerId),localSelected);
+    if(localSelected===DONE_PICK){
+      const done=roomData.donePlayers||[];
+      if(!done.includes(myPlayerId))
+        await update(getRoomRef(),{donePlayers:[...done,myPlayerId]});
     }
     localSelected=null;
     document.querySelectorAll('.cand-checkbox').forEach(cb=>cb.disabled=true);
@@ -166,110 +188,100 @@
     const picks=(roomData.picks||{})[round]||{};
     const order=roomData.playerOrder||Object.keys(pl);
     const retryPlayers=roomData.retryPlayers||null;
-    const isRetry=retryPlayers&&retryPlayers.length>0;
-    const donePlayers=roomData.donePlayers||[];
+    const isRetry=!!(retryPlayers&&retryPlayers.length>0);
 
-    // 再指名対象：retryPlayersに含まれる人のみ（選択終了済みは除く）
+    // 今回指名する人
     const activeOrder=isRetry
-      ?order.filter(pid=>retryPlayers.includes(pid))
-      :order.filter(pid=>!isPlayerDone(pid));
+      ? retryPlayers
+      : order.filter(pid=>!isPlayerDone(pid));
 
-    // 指名状況表示（全員分）
-    document.getElementById('pick-wait-list').innerHTML=order.map(pid=>{
-      const p=pl[pid];
-      const isDone=isPlayerDone(pid);
-      const inActive=activeOrder.includes(pid);
-      const picked=picks[pid]!==undefined;
-      const isMe=pid===myPlayerId;
-      let status='';
-      if(isDone)status='🏁';
-      else if(picked)status='✅';
-      else if(inActive)status='⏳';
-      else status='−';
-      return '<li class="'+(picked||isDone?'done':'waiting')+'"><span class="player-name-btn'+(isMe?' me':'')+'" onclick="showPlayerHistory(\''+pid+'\')">'+esc(p.name)+'</span> '+status+'</li>';
+    // 自分が今回指名対象か
+    const amIActive=activeOrder.includes(myPlayerId);
+
+    // 指名状況表示
+    document.getElementById('pick-wait-list').innerHTML=activeOrder.map(pid=>{
+      const p=pl[pid];const done=picks[pid]!==undefined;const isMe=pid===myPlayerId;
+      return '<li class="'+(done?'done':'waiting')+'">'
+        +'<span class="player-name-btn'+(isMe?' me':'')+'" onclick="showPlayerHistory(\''+pid+'\')">'+esc(p.name)+'</span>'
+        +' '+(done?'✅':'⏳')+'</li>';
     }).join('');
 
     const allDone=activeOrder.every(pid=>picks[pid]!==undefined);
     const rb=document.getElementById('start-reveal-btn');
     if(rb)rb.style.display=(isHost&&allDone&&!isRetry)?'block':'none';
-    if(isRetry&&allDone&&activeOrder.length>0&&isHost){setTimeout(()=>startRetryReveal(),500);}
-    // 再指名対象が0人（全員終了済み）の場合はそのまま次の巡へ
-    if(isRetry&&activeOrder.length===0&&isHost){setTimeout(()=>advanceRound(round),500);}
+    // 再指名で全員完了→自動発表へ
+    if(isRetry&&allDone&&isHost)setTimeout(()=>startRevealForRetry(),500);
 
-    // 自分が指名対象かどうか
-    const myTurn=!isRetry||retryPlayers.includes(myPlayerId);
-    const iAmDone=isPlayerDone(myPlayerId)&&!retryPlayers?.includes(myPlayerId);
     const candSection=document.getElementById('cand-section');
-    if(candSection)candSection.style.display=(myTurn&&!iAmDone)?'block':'none';
-
     const retryNotice=document.getElementById('retry-notice');
-    if(retryNotice){
-      if(iAmDone&&!isRetry){retryNotice.style.display='block';retryNotice.textContent='あなたは選択終了しています';}
-      else if(isRetry&&!myTurn){
-        const retryNames=retryPlayers.filter(pid=>!isPlayerDone(pid)).map(pid=>pl[pid]?.name||pid).join('、');
-        retryNotice.style.display='block';
-        retryNotice.textContent='再指名中：'+retryNames;
-      } else retryNotice.style.display='none';
-    }
 
-    if(myTurn&&!iAmDone){
-      const used=getUsed();
-      const cands=(roomData.candidates||[]).filter(c=>!used.has(c));
+    if(!amIActive){
+      if(candSection)candSection.style.display='none';
+      if(retryNotice){
+        retryNotice.style.display='block';
+        retryNotice.textContent=isPlayerDone(myPlayerId)
+          ?'あなたは選択終了しています'
+          :'待機中… ('+activeOrder.map(pid=>pl[pid]?.name||pid).join('、')+'が選択中)';
+      }
+      document.getElementById('pick-my-pick').textContent='今巡はあなたの番ではありません';
+    } else {
+      if(retryNotice)retryNotice.style.display='none';
+      if(candSection)candSection.style.display='block';
 
       if(myPick!==undefined){
-        const dispPick=myPick===DONE_PICK?'選択終了':myPick;
-        document.getElementById('pick-my-pick').textContent='✅ 確定：'+dispPick;
-        document.getElementById('pick-candidates').innerHTML='<div class="confirmed-pick">'+esc(dispPick)+'</div>';
+        const disp=myPick===DONE_PICK?'選択終了':myPick;
+        document.getElementById('pick-my-pick').textContent='✅ 確定：'+disp;
+        document.getElementById('pick-candidates').innerHTML='<div class="confirmed-pick">'+esc(disp)+'</div>';
         const btn=document.getElementById('confirm-btn');
         if(btn){btn.disabled=true;btn.textContent='✅ 確定済み';btn.classList.add('btn-disabled');}
       } else {
         document.getElementById('pick-my-pick').textContent='候補を選んで「確定」を押してください';
+        const used=getUsed();
+        const cands=(roomData.candidates||[]).filter(c=>!used.has(c));
         let html='';
         cands.forEach(c=>{
-          const checked=localSelected===c;
-          html+='<li><label class="cand-label"><input type="checkbox" class="cand-checkbox" data-val="'+esc(c)+'" '+(checked?'checked':'')+' onchange="selectOption(\''+escA(c)+'\')"> '+esc(c)+'</label></li>';
+          html+='<li><label class="cand-label"><input type="checkbox" class="cand-checkbox" data-val="'+esc(c)+'" '
+            +(localSelected===c?'checked':'')+' onchange="selectOption(\''+escA(c)+'\')"> '+esc(c)+'</label></li>';
         });
-        // 選択終了
-        html+='<li><label class="cand-label done-label"><input type="checkbox" class="cand-checkbox" data-val="'+DONE_PICK+'" '+(localSelected===DONE_PICK?'checked':'')+' onchange="selectOption(\''+DONE_PICK+'\')"> 🏁 選択終了（以降の巡もスキップ）</label></li>';
+        if(!isRetry){
+          html+='<li><label class="cand-label done-label"><input type="checkbox" class="cand-checkbox" data-val="'+DONE_PICK+'" '
+            +(localSelected===DONE_PICK?'checked':'')+' onchange="selectOption(\''+DONE_PICK+'\')"> 🏁 選択終了（以降の巡もスキップ）</label></li>';
+        }
         document.getElementById('pick-candidates').innerHTML=html;
         const btn=document.getElementById('confirm-btn');
         if(btn){
           btn.disabled=localSelected===null;
           btn.textContent='✔ 確定する';
-          if(localSelected===null)btn.classList.add('btn-disabled');
-          else btn.classList.remove('btn-disabled');
+          btn.classList.toggle('btn-disabled',localSelected===null);
         }
       }
-    } else if(!iAmDone){
-      document.getElementById('pick-my-pick').textContent='今巡はあなたの指名はありません（待機中）';
     }
 
-    // 過去の獲得履歴
-    const allResults=roomData.results||{};
+    // 獲得履歴
     const historyLines=[];
-    for(const[rnd,rr]of Object.entries(allResults)){
-      for(const[rpid,item]of Object.entries(rr)){
-        if(rpid===myPlayerId&&item.winner===myPlayerId&&item.candidate!==DONE_PICK)historyLines.push('第'+rnd+'巡：'+item.candidate);
-      }
-    }
+    for(const[rnd,rr]of Object.entries(roomData.results||{}))
+      for(const[rpid,item]of Object.entries(rr))
+        if(rpid===myPlayerId&&item.winner===myPlayerId&&item.candidate!==DONE_PICK)
+          historyLines.push('第'+rnd+'巡：'+item.candidate);
     const histEl=document.getElementById('pick-history');
     if(histEl){
-      if(historyLines.length>0){histEl.style.display='block';histEl.innerHTML='<div class="history-title">🏆 あなたのこれまでの獲得</div>'+historyLines.map(l=>'<div class="history-item">'+esc(l)+'</div>').join('');}
-      else histEl.style.display='none';
+      if(historyLines.length){
+        histEl.style.display='block';
+        histEl.innerHTML='<div class="history-title">🏆 あなたのこれまでの獲得</div>'
+          +historyLines.map(l=>'<div class="history-item">'+esc(l)+'</div>').join('');
+      } else histEl.style.display='none';
     }
   }
 
   window.startReveal=async function(){
     const order=roomData.playerOrder||[];
-    const donePlayers=roomData.donePlayers||[];
-    // 選択終了済みも含めて全員発表（終了者はその旨表示）
     const queue=order.map(pid=>({pid,isRetry:false}));
     await update(getRoomRef(),{phase:'revealing',revealQueue:queue,revealQueueIndex:0,revealSubStep:0,revealShown:{}});
   };
 
-  async function startRetryReveal(){
+  async function startRevealForRetry(){
     const retryPlayers=roomData.retryPlayers||[];
-    if(retryPlayers.length===0){await advanceRound(roomData.currentRound);return;}
+    if(!retryPlayers.length)return;
     const queue=retryPlayers.map(pid=>({pid,isRetry:true}));
     await update(getRoomRef(),{phase:'revealing',revealQueue:queue,revealQueueIndex:0,revealSubStep:0,revealShown:{}});
   }
@@ -284,10 +296,8 @@
     const queue=roomData.revealQueue||[];
     const qIdx=roomData.revealQueueIndex||0;
     const subStep=roomData.revealSubStep||0;
-    const donePlayers=roomData.donePlayers||[];
 
     document.getElementById('reveal-theme').textContent=roomData.theme;
-
     const nextBtn=document.getElementById('next-reveal-btn');
     const judgeBtn=document.getElementById('judge-btn');
     const showBtn=document.getElementById('reveal-show-btn');
@@ -308,20 +318,21 @@
     const p=pl[pid];
     const rawPick=picks[pid];
     const pick=rawPick===DONE_PICK?'選択終了':(rawPick||'（指名なし）');
-    const isPickDone=rawPick===DONE_PICK;
+    const isRetryReveal=queue[0]?.isRetry||false;
 
     if(subStep===0){
       document.getElementById('reveal-big').style.display='flex';
       document.getElementById('reveal-summary').style.display='none';
       document.getElementById('reveal-done-msg').style.display='none';
       document.getElementById('reveal-big-name').textContent=p?.name||'';
-      document.getElementById('reveal-big-pick').textContent='';
-      document.getElementById('reveal-big-round').textContent='第'+round+'巡　指名発表';
+      const pickEl=document.getElementById('reveal-big-pick');
+      pickEl.textContent='';
+      pickEl.style.color=rawPick===DONE_PICK?'var(--border)':'var(--red)';
+      document.getElementById('reveal-big-round').textContent=
+        isRetryReveal?'第'+round+'巡　再指名発表':'第'+round+'巡　指名発表';
       const shown=(roomData.revealShown||{})[String(qIdx)];
       if(shown){
-        const pickEl=document.getElementById('reveal-big-pick');
         pickEl.textContent=pick;
-        pickEl.style.color=isPickDone?'var(--border)':'var(--red)';
         if(nextBtn)nextBtn.style.display=isHost?'block':'none';
       } else {
         if(showBtn)showBtn.style.display=isHost?'block':'none';
@@ -330,31 +341,34 @@
       document.getElementById('reveal-big').style.display='none';
       document.getElementById('reveal-summary').style.display='block';
       document.getElementById('reveal-done-msg').style.display='none';
-      const isRetryReveal=queue[0]?.isRetry||false;
-      document.getElementById('reveal-summary-title').textContent=isRetryReveal?'第'+round+'巡　再指名の結果':'第'+round+'巡　ここまでの結果';
+      document.getElementById('reveal-summary-title').textContent=
+        isRetryReveal?'第'+round+'巡　再指名の結果':'第'+round+'巡　ここまでの結果';
       const revealedPids=new Set(queue.slice(0,qIdx+1).map(q=>q.pid));
       let html='';
       for(const pid2 of order){
         const p2=pl[pid2];
         const isRevealed=revealedPids.has(pid2);
         const rawP=picks[pid2];
-        const isDoneP=donePlayers.includes(pid2)&&!isRevealed;
         let pick2='—';
-        if(isRevealed){pick2=rawP===DONE_PICK?'🏁 選択終了':(rawP||'（指名なし）');}
-        else if(donePlayers.includes(pid2)){pick2='🏁';}
-        const rowClass=isRevealed?'':'not-yet';
-        html+='<div class="summary-row '+rowClass+'"><span class="summary-name">'+esc(p2?.name||'')+'</span><span class="summary-pick">'+(isRevealed&&rawP!==DONE_PICK?esc(pick2):'<span style="color:var(--border);font-weight:400">'+esc(pick2)+'</span>')+'</span></div>';
+        if(isRevealed) pick2=rawP===DONE_PICK?'🏁 選択終了':(rawP||'（指名なし）');
+        else if(isPlayerDone(pid2)) pick2='🏁';
+        const st=isRevealed&&rawP!==DONE_PICK?'color:var(--red);font-weight:700':'color:var(--border);font-weight:400';
+        html+='<div class="summary-row'+(isRevealed?'':' not-yet')+'">'
+          +'<span class="summary-name">'+esc(p2?.name||'')+'</span>'
+          +'<span style="'+st+'">'+esc(pick2)+'</span></div>';
       }
       document.getElementById('reveal-summary-list').innerHTML=html;
       if(nextBtn)nextBtn.style.display=isHost?'block':'none';
     }
   }
 
-  window.revealShowPick=async function(){await update(getRoomRef(),{['revealShown/'+String(roomData.revealQueueIndex||0)]:true});};
+  window.revealShowPick=async function(){
+    await update(getRoomRef(),{['revealShown/'+String(roomData.revealQueueIndex||0)]:true});
+  };
   window.nextReveal=async function(){
-    const subStep=roomData.revealSubStep||0;
-    if(subStep===0){await update(getRoomRef(),{revealSubStep:1});}
-    else{const newIdx=(roomData.revealQueueIndex||0)+1;await update(getRoomRef(),{revealQueueIndex:newIdx,revealSubStep:0});}
+    const sub=roomData.revealSubStep||0;
+    if(sub===0) await update(getRoomRef(),{revealSubStep:1});
+    else await update(getRoomRef(),{revealQueueIndex:(roomData.revealQueueIndex||0)+1,revealSubStep:0});
   };
 
   // ===== 競合チェック =====
@@ -362,14 +376,13 @@
     const round=roomData.currentRound;
     const picks=(roomData.picks||{})[round]||{};
     const retryPlayers=roomData.retryPlayers||null;
-    const isRetry=retryPlayers&&retryPlayers.length>0;
-    const donePlayers=roomData.donePlayers||[];
-    const targetPicks=isRetry
-      ?Object.fromEntries(Object.entries(picks).filter(([pid])=>retryPlayers.includes(pid)&&!donePlayers.includes(pid)))
-      :Object.fromEntries(Object.entries(picks).filter(([pid])=>!donePlayers.includes(pid)||picks[pid]===DONE_PICK));
+    const isRetry=!!(retryPlayers&&retryPlayers.length>0);
+    const targetPids=isRetry?retryPlayers:(roomData.playerOrder||[]);
+    const targetPicks=Object.fromEntries(
+      targetPids.map(pid=>[pid,picks[pid]]).filter(([,v])=>v!==undefined)
+    );
 
-    const candMap={};
-    const singles={};
+    const candMap={};const singles={};
     for(const[pid,cand]of Object.entries(targetPicks)){
       if(cand===DONE_PICK){singles[pid]={candidate:DONE_PICK,winner:pid,competed:false};continue;}
       if(!candMap[cand])candMap[cand]=[];
@@ -377,14 +390,14 @@
     }
     const conflictGroups=[];
     for(const[cand,pids]of Object.entries(candMap)){
-      if(pids.length===1)singles[pids[0]]={candidate:cand,winner:pids[0],competed:false};
+      if(pids.length===1) singles[pids[0]]={candidate:cand,winner:pids[0],competed:false};
       else conflictGroups.push({candidate:cand,pids});
     }
 
     const currentResults={...(roomData.results?.[round]||{}),...singles};
     await update(getRoomRef(),{['results/'+round]:currentResults});
 
-    // 終了チェック
+    const donePlayers=roomData.donePlayers||[];
     const allResults={...roomData.results,[round]:currentResults};
     if(shouldGameEnd(allResults,donePlayers)){
       await update(getRoomRef(),{phase:'done',retryPlayers:null,totalRounds:round});
@@ -395,28 +408,31 @@
       await update(getRoomRef(),{phase:'round_summary',retryPlayers:null,roundSummaryRound:round});
     } else {
       const allConflict=[...new Set(conflictGroups.flatMap(g=>g.pids))];
-      const shuffled=[...allConflict].sort(()=>Math.random()-0.5);
+      // 引く順番をランダムシャッフル
+      const shuffledOrder=allConflict.slice().sort(()=>Math.random()-0.5);
       const lotteryGroups=conflictGroups.map(g=>{
         const winnerIdx=Math.floor(Math.random()*g.pids.length);
-        const envelopes=[...g.pids.map((pid,i)=>({pid,isWinner:i===winnerIdx}))].sort(()=>Math.random()-0.5);
-        return{candidate:g.candidate,pids:g.pids,envelopes,chosen:{},winner:g.pids[winnerIdx]};
+        const winner=g.pids[winnerIdx];
+        // 封筒をランダムシャッフル（当たり位置も毎回変わる）
+        const envelopes=g.pids.map((pid,i)=>({pid,isWinner:i===winnerIdx}))
+          .sort(()=>Math.random()-0.5)
+          .sort(()=>Math.random()-0.5);
+        return{candidate:g.candidate,pids:g.pids,envelopes,chosen:{},winner};
       });
-      await update(getRoomRef(),{phase:'lottery_pick',lotteryGroups,lotteryPickOrder:shuffled,lotteryPickIndex:0,lotteryRevealed:false});
+      await update(getRoomRef(),{phase:'lottery_pick',lotteryGroups,
+        lotteryPickOrder:shuffledOrder,lotteryPickIndex:0,lotteryRevealed:false});
     }
   };
 
-  // 終了判定：全員選択終了 or 全候補獲得済み
   function shouldGameEnd(allResults,donePlayers){
     const order=roomData.playerOrder||[];
     const candidates=roomData.candidates||[];
-    // 全員選択終了チェック
-    const allDone=order.every(pid=>donePlayers.includes(pid));
-    if(allDone)return true;
-    // 全候補獲得済みチェック
+    if(order.every(pid=>donePlayers.includes(pid)))return true;
     const used=new Set();
-    for(const rr of Object.values(allResults))for(const item of Object.values(rr))if(item.winner&&item.candidate!==DONE_PICK)used.add(item.candidate);
-    if(candidates.every(c=>used.has(c)))return true;
-    return false;
+    for(const rr of Object.values(allResults))
+      for(const item of Object.values(rr))
+        if(item.winner&&item.candidate!==DONE_PICK)used.add(item.candidate);
+    return candidates.every(c=>used.has(c));
   }
 
   // ===== 巡サマリー =====
@@ -425,24 +441,27 @@
     const round=roomData.roundSummaryRound||roomData.currentRound;
     const pl=roomData.players||{};
     const order=roomData.playerOrder||[];
-    const results=roomData.results||{};
-    const roundResults=results[round]||{};
-    const donePlayers=roomData.donePlayers||[];
+    const roundResults=(roomData.results||{})[round]||{};
     document.getElementById('rs-title').textContent='第'+round+'巡　確定結果';
     let html='';
     for(const pid of order){
       const p=pl[pid];const item=roundResults[pid];
       const won=item&&item.winner===pid&&item.candidate!==DONE_PICK;
       const isDone=item&&item.candidate===DONE_PICK;
-      let pickText=won?esc(item.candidate):(isDone?'🏁 選択終了':'—');
-      html+='<div class="rs-row'+(won?'':' rs-pending')+'"><span class="rs-name">'+esc(p?.name||'')+'</span><span class="rs-pick">'+pickText+'</span></div>';
+      html+='<div class="rs-row'+(won?'':' rs-pending')+'">'
+        +'<span class="rs-name">'+esc(p?.name||'')+'</span>'
+        +'<span class="rs-pick">'+(won?esc(item.candidate):(isDone?'🏁 選択終了':'—'))+'</span></div>';
     }
     document.getElementById('rs-list').innerHTML=html;
     const nextBtn=document.getElementById('rs-next-btn');
     if(nextBtn)nextBtn.style.display=isHost?'block':'none';
   }
+
   window.roundSummaryNext=async function(){
-    await advanceRound(roomData.roundSummaryRound||roomData.currentRound);
+    const round=roomData.roundSummaryRound||roomData.currentRound;
+    const next=round+1;
+    await update(getRoomRef(),{phase:'picking',currentRound:next,retryPlayers:null,
+      revealQueue:null,revealShown:{},['picks/'+next]:{}});
   };
 
   // ===== 封筒くじ引き =====
@@ -453,22 +472,21 @@
     const pickOrder=roomData.lotteryPickOrder||[];
     const pickIndex=roomData.lotteryPickIndex||0;
     const revealed=roomData.lotteryRevealed||false;
-    const candNames=groups.map(g=>g.candidate).join('・');
-    document.getElementById('lp-title').textContent='「'+candNames+'」競合！封筒くじ引き';
+    document.getElementById('lp-title').textContent=
+      '「'+groups.map(g=>g.candidate).join('・')+'」競合！封筒くじ引き';
     const allChosen=groups.every(g=>Object.keys(g.chosen||{}).length===g.pids.length);
     if(revealed){renderEnvelopeResult(groups,pl);return;}
     if(allChosen){
       document.getElementById('lp-envelopes').innerHTML='<div class="lp-all-chosen">全員が封筒を選びました！</div>';
       document.getElementById('lp-status').textContent='封筒を開封してください';
-      const rb=document.getElementById('lp-reveal-btn');
-      if(rb)rb.style.display=isHost?'block':'none';
+      const rb=document.getElementById('lp-reveal-btn');if(rb)rb.style.display=isHost?'block':'none';
       document.getElementById('lp-next-btn').style.display='none';
       return;
     }
     const currentPid=pickOrder[pickIndex];
-    const currentPlayer=pl[currentPid];
     const isMyTurn=currentPid===myPlayerId;
-    document.getElementById('lp-status').textContent=isMyTurn?'あなたが封筒を選ぶ番です！':(currentPlayer?.name||'?')+'が選んでいます...';
+    document.getElementById('lp-status').textContent=
+      isMyTurn?'あなたが封筒を選ぶ番です！':(pl[currentPid]?.name||'?')+'が選んでいます...';
     document.getElementById('lp-reveal-btn').style.display='none';
     document.getElementById('lp-next-btn').style.display='none';
     let html='';
@@ -476,10 +494,17 @@
       const chosen=group.chosen||{};const alreadyChosen=chosen[currentPid]!==undefined;
       html+='<div class="lp-group"><div class="lp-group-cand">「'+esc(group.candidate)+'」の封筒</div><div class="lp-envelopes-row">';
       for(let i=0;i<group.envelopes.length;i++){
-        const takenBy=Object.entries(chosen).find(([,v])=>Number(v)===i);const isTaken=!!takenBy;const isMyChoice=takenBy&&takenBy[0]===myPlayerId;
-        if(isTaken){html+='<div class="envelope taken'+(isMyChoice?' mine':'')+'"><div class="env-icon">✉️</div><div class="env-label">'+(isMyChoice?'あなた':esc(pl[takenBy[0]]?.name||'?'))+'</div></div>';}
-        else if(isMyTurn&&!alreadyChosen){html+='<div class="envelope pickable" onclick="pickEnvelope(\''+escA(group.candidate)+'\','+i+')"><div class="env-icon">✉️</div><div class="env-label">選ぶ</div></div>';}
-        else{html+='<div class="envelope waiting"><div class="env-icon">✉️</div><div class="env-label">-</div></div>';}
+        const takenBy=Object.entries(chosen).find(([,v])=>Number(v)===i);
+        const isTaken=!!takenBy;const isMyChoice=takenBy&&takenBy[0]===myPlayerId;
+        if(isTaken){
+          html+='<div class="envelope taken'+(isMyChoice?' mine':'')+'"><div class="env-icon">✉️</div>'
+            +'<div class="env-label">'+(isMyChoice?'あなた':esc(pl[takenBy[0]]?.name||'?'))+'</div></div>';
+        } else if(isMyTurn&&!alreadyChosen){
+          html+='<div class="envelope pickable" onclick="pickEnvelope(\''+escA(group.candidate)+'\','+i+')">'
+            +'<div class="env-icon">✉️</div><div class="env-label">選ぶ</div></div>';
+        } else {
+          html+='<div class="envelope waiting"><div class="env-icon">✉️</div><div class="env-label">-</div></div>';
+        }
       }
       html+='</div></div>';
     }
@@ -487,22 +512,31 @@
   }
 
   window.pickEnvelope=async function(candidate,envIdx){
-    const groups=roomData.lotteryGroups||[];const pickOrder=roomData.lotteryPickOrder||[];const pickIndex=roomData.lotteryPickIndex||0;
+    const groups=roomData.lotteryGroups||[];
+    const pickOrder=roomData.lotteryPickOrder||[];
+    const pickIndex=roomData.lotteryPickIndex||0;
     if(pickOrder[pickIndex]!==myPlayerId)return;
     const groupIdx=groups.findIndex(g=>g.candidate===candidate);if(groupIdx<0)return;
     const updates={['lotteryGroups/'+groupIdx+'/chosen/'+myPlayerId]:envIdx};
     const newGroups=groups.map((g,i)=>i===groupIdx?{...g,chosen:{...(g.chosen||{}),[myPlayerId]:envIdx}}:g);
-    const myDone=newGroups.every(g=>g.chosen&&g.chosen[myPlayerId]!==undefined);
-    if(myDone)updates['lotteryPickIndex']=pickIndex+1;
+    if(newGroups.every(g=>g.chosen&&g.chosen[myPlayerId]!==undefined))
+      updates['lotteryPickIndex']=pickIndex+1;
     await update(getRoomRef(),updates);
   };
 
   function renderEnvelopeResult(groups,pl){
     let html='<div class="lp-result-title">開封！</div>';
     for(const group of groups){
-      const chosen=group.chosen||{};const envelopes=group.envelopes||[];
+      const chosen=group.chosen||{};
       html+='<div class="lp-result-group"><div class="lp-group-cand">「'+esc(group.candidate)+'」</div><div class="lp-envelopes-row">';
-      for(let i=0;i<envelopes.length;i++){const env=envelopes[i];const takenBy=Object.entries(chosen).find(([,v])=>Number(v)===i);const playerName=takenBy?esc(pl[takenBy[0]]?.name||'?'):'?';html+='<div class="envelope revealed '+(env.isWinner?'winner':'loser')+'"><div class="env-icon">'+(env.isWinner?'🎉':'💨')+'</div><div class="env-label">'+playerName+'</div></div>';}
+      for(let i=0;i<group.envelopes.length;i++){
+        const env=group.envelopes[i];
+        const takenBy=Object.entries(chosen).find(([,v])=>Number(v)===i);
+        const playerName=takenBy?esc(pl[takenBy[0]]?.name||'?'):'?';
+        html+='<div class="envelope revealed '+(env.isWinner?'winner':'loser')+'">'
+          +'<div class="env-icon">'+(env.isWinner?'🎉':'💨')+'</div>'
+          +'<div class="env-label">'+playerName+'</div></div>';
+      }
       html+='</div><div class="lp-winner-announce">🏆 '+esc(pl[group.winner]?.name||'?')+' が「'+esc(group.candidate)+'」を獲得！</div>';
       const losers=group.pids.filter(p=>p!==group.winner).map(p=>pl[p]?.name||p);
       if(losers.length)html+='<div class="lp-losers">外れ：'+losers.map(esc).join('、')+' → 再指名へ</div>';
@@ -516,72 +550,89 @@
 
   window.revealEnvelopes=async function(){await update(getRoomRef(),{lotteryRevealed:true});};
 
+  // くじ引き結果後 → 外れた人を再指名（picking）へ直接移行
   window.lotteryPickNext=async function(){
-    const round=roomData.currentRound;const groups=roomData.lotteryGroups||[];
+    const round=roomData.currentRound;
+    const groups=roomData.lotteryGroups||[];
+    const donePlayers=roomData.donePlayers||[];
     const roundResults={...(roomData.results?.[round]||{})};
     const retryList=[];
     for(const group of groups){
       const winner=group.winner;
-      for(const pid of group.pids)roundResults[pid]={candidate:group.candidate,winner,competed:true};
-      // 外れた人は全員再指名（donePlayers に関係なく）
+      for(const pid of group.pids)
+        roundResults[pid]={candidate:group.candidate,winner,competed:true};
+      // 外れた人は全員再指名（選択終了に関係なく）
       group.pids.filter(p=>p!==winner).forEach(p=>retryList.push(p));
     }
     await update(getRoomRef(),{['results/'+round]:roundResults});
 
-    const donePlayers=roomData.donePlayers||[];
     const allResults={...roomData.results,[round]:roundResults};
     if(shouldGameEnd(allResults,donePlayers)){
-      await update(getRoomRef(),{phase:'done',retryPlayers:null,totalRounds:round,lotteryGroups:null,lotteryRevealed:false});
+      await update(getRoomRef(),{phase:'done',retryPlayers:null,totalRounds:round,
+        lotteryGroups:null,lotteryRevealed:false});
       return;
     }
 
     if(retryList.length>0){
-      // 外れた人のpicksをクリアして再指名フェーズへ
+      // 外れた人のpicksをクリアして再指名画面（picking）へ
       const clearUpdates={};
       for(const pid of retryList)clearUpdates['picks/'+round+'/'+pid]=null;
       await update(getRoomRef(),clearUpdates);
-      // 再指名者を発表キューに入れてrevealingへ（どでかく表示）
-      const queue=retryList.map(pid=>({pid,isRetry:true}));
       await update(getRoomRef(),{
-        phase:'revealing',
-        revealQueue:queue,
-        revealQueueIndex:0,
-        revealSubStep:0,
-        revealShown:{},
+        phase:'picking',
         retryPlayers:retryList,
         lotteryGroups:null,
         lotteryRevealed:false
       });
     } else {
-      await update(getRoomRef(),{phase:'round_summary',retryPlayers:null,roundSummaryRound:round,lotteryGroups:null,lotteryRevealed:false});
+      await update(getRoomRef(),{phase:'round_summary',retryPlayers:null,
+        roundSummaryRound:round,lotteryGroups:null,lotteryRevealed:false});
     }
   };
-  async function advanceRound(round){
-    const next=round+1;
-    await update(getRoomRef(),{phase:'picking',currentRound:next,retryPlayers:null,revealQueue:null,revealShown:{},['picks/'+next]:{}});
-  }
 
   // ===== 最終結果 =====
   function renderDone(){
     showScreen('screen-done');
-    const pl=roomData.players||{};const results=roomData.results||{};const order=roomData.playerOrder||[];
+    const pl=roomData.players||{};
+    const results=roomData.results||{};
+    const order=roomData.playerOrder||[];
     const totalRounds=roomData.totalRounds||Object.keys(results).length;
     document.getElementById('done-theme').textContent=roomData.theme;
     document.getElementById('done-total-rounds').textContent='全'+totalRounds+'巡';
     const pd={};for(const pid of order)pd[pid]=[];
-    for(const[round,rr]of Object.entries(results)){
-      for(const[pid,item]of Object.entries(rr)){
-        if(item.winner===pid&&item.candidate!==DONE_PICK)pd[pid]&&pd[pid].push({round:parseInt(round),candidate:item.candidate});
-      }
-    }
+    for(const[round,rr]of Object.entries(results))
+      for(const[pid,item]of Object.entries(rr))
+        if(item.winner===pid&&item.candidate!==DONE_PICK)
+          pd[pid]&&pd[pid].push({round:parseInt(round),candidate:item.candidate});
     let html='';
-    for(const pid of order){const p=pl[pid];const drafts=pd[pid]||[];html+='<div class="result-card '+(pid===myPlayerId?'my-card':'')+'"><div class="result-name">'+(p.isHost?'👑 ':'')+esc(p.name)+'</div><ul class="result-picks">'+(drafts.sort((a,b)=>a.round-b.round).map(d=>'<li>第'+d.round+'巡：'+esc(d.candidate)+'</li>').join('')||'<li>獲得なし</li>')+'</ul></div>';}
+    for(const pid of order){
+      const p=pl[pid];const drafts=pd[pid]||[];
+      html+='<div class="result-card '+(pid===myPlayerId?'my-card':'')+'"><div class="result-name">'
+        +(p.isHost?'👑 ':'')+esc(p.name)+'</div><ul class="result-picks">'
+        +(drafts.sort((a,b)=>a.round-b.round).map(d=>'<li>第'+d.round+'巡：'+esc(d.candidate)+'</li>').join('')
+          ||'<li>獲得なし</li>')+'</ul></div>';
+    }
     document.getElementById('done-results').innerHTML=html;
   }
 
   window.addEventListener('load',()=>{
     const p=new URLSearchParams(window.location.search);const rid=p.get('room');
-    if(rid){roomId=rid;const saved=loadPlayerId();if(saved){get(ref(db,'rooms/'+roomId)).then(snap=>{if(snap.exists()){const data=snap.val();if(data.players&&data.players[saved]){myPlayerId=saved;myPlayerName=data.players[saved].name;isHost=data.players[saved].isHost||false;startListening();return;}}showScreen('screen-join');document.getElementById('join-room-id').value=rid;});}else{showScreen('screen-join');document.getElementById('join-room-id').value=rid;}}
+    if(rid){
+      roomId=rid;const saved=loadPlayerId();
+      if(saved){
+        get(ref(db,'rooms/'+roomId)).then(snap=>{
+          if(snap.exists()){
+            const data=snap.val();
+            if(data.players&&data.players[saved]){
+              myPlayerId=saved;myPlayerName=data.players[saved].name;
+              isHost=data.players[saved].isHost||false;
+              startListening();return;
+            }
+          }
+          showScreen('screen-join');document.getElementById('join-room-id').value=rid;
+        });
+      } else {showScreen('screen-join');document.getElementById('join-room-id').value=rid;}
+    }
   });
 </script>
 <style>
@@ -614,7 +665,6 @@ textarea{min-height:120px;resize:vertical;}
 .rules-list{list-style:none;padding:0;}
 .rules-list li{font-size:.88rem;padding:6px 0;border-bottom:1px dotted var(--paper2);line-height:1.6;}
 .rules-list li:last-child{border-bottom:none;}
-.rules-list li::before{content:'▶ ';color:var(--red);font-size:.7rem;}
 .room-id-badge{display:inline-block;background:var(--ink);color:var(--paper);font-size:1.4rem;font-weight:900;letter-spacing:.3em;padding:6px 18px;border-radius:2px;margin-bottom:12px;}
 .share-url-box{background:var(--paper2);border:1px dashed var(--border);border-radius:3px;padding:10px 12px;font-size:.78rem;word-break:break-all;margin-bottom:10px;color:var(--accent);}
 .player-list,.wait-list{list-style:none;padding:0;}
@@ -648,7 +698,7 @@ textarea{min-height:120px;resize:vertical;}
 .summary-title{font-size:1.2rem;font-weight:900;color:var(--red);margin-bottom:16px;text-align:center;border-bottom:2px solid var(--border);padding-bottom:10px;}
 .summary-row{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--paper2);font-size:1rem;}
 .summary-row.not-yet{opacity:.4;}
-.summary-name{font-weight:700;}.summary-pick{color:var(--red);font-weight:700;}
+.summary-name{font-weight:700;}
 #reveal-done-msg{display:none;text-align:center;padding:40px 24px;font-size:1.1rem;font-weight:700;}
 #screen-round-summary{max-width:680px;margin:0 auto;padding:24px 16px 60px;}
 .rs-header{text-align:center;padding:20px 0 16px;border-bottom:3px double var(--border);margin-bottom:28px;}
@@ -663,8 +713,7 @@ textarea{min-height:120px;resize:vertical;}
 .lp-group-cand{text-align:center;font-size:.9rem;color:var(--border);margin-bottom:10px;font-weight:700;}
 .lp-envelopes-row{display:flex;justify-content:center;gap:16px;flex-wrap:wrap;}
 .envelope{width:80px;height:100px;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;transition:transform .15s;}
-.envelope .env-icon{font-size:2.2rem;}
-.envelope .env-label{font-size:.72rem;font-weight:700;text-align:center;}
+.envelope .env-icon{font-size:2.2rem;}.envelope .env-label{font-size:.72rem;font-weight:700;text-align:center;}
 .envelope.pickable{background:#fff8ee;border:2px solid var(--gold);cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.15);}
 .envelope.pickable:hover{transform:translateY(-6px);}
 .envelope.taken{background:var(--paper2);border:2px solid var(--border);}
@@ -683,7 +732,6 @@ textarea{min-height:120px;resize:vertical;}
 .result-name{font-size:1.1rem;font-weight:900;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--paper2);color:var(--red);}
 .result-picks{list-style:none;padding:0;}.result-picks li{padding:6px 0;border-bottom:1px dotted var(--paper2);}
 .done-total{text-align:center;font-size:.9rem;color:var(--border);margin-bottom:20px;}
-.phase-badge{display:inline-block;background:var(--red);color:#fff;font-size:.75rem;font-weight:700;padding:3px 10px;border-radius:2px;margin-bottom:10px;}
 .text-center{text-align:center;}.mt-8{margin-top:8px;}.mt-16{margin-top:16px;}.small{font-size:.82rem;color:var(--border);}
 </style>
 </head>
@@ -711,10 +759,7 @@ textarea{min-height:120px;resize:vertical;}
   <div class="card"><div class="card-title">📋 ドラフトの設定</div>
   <label>ホスト名</label><input type="text" id="create-host-name" placeholder="例：田中">
   <label>テーマ</label><input type="text" id="create-theme" placeholder="例：お惣菜ドラフト">
-  <label>候補リスト（1行に1つ）</label><textarea id="create-candidates" placeholder="例：からあげ
-　　野菜炒め
-　　みそしる
-　　コロッケ"></textarea>
+  <label>候補リスト（1行に1つ）</label><textarea id="create-candidates" placeholder="例：からあげ&#10;　　野菜炒め&#10;　　みそしる&#10;　　コロッケ"></textarea>
   <button class="btn btn-primary" onclick="createRoom()">🎯 ルームを作成する</button>
   <button class="btn btn-outline" onclick="showScreen('screen-top')">← 戻る</button></div>
 </div>
@@ -739,7 +784,7 @@ textarea{min-height:120px;resize:vertical;}
 </div>
 <div id="screen-picking" class="screen">
   <div class="banner"><div class="banner-title" id="pick-theme">-</div><div class="banner-sub" id="pick-round">-</div></div>
-  <span class="phase-badge">指名中</span>
+  <span class="phase-badge" style="display:inline-block;background:var(--red);color:#fff;font-size:.75rem;font-weight:700;padding:3px 10px;border-radius:2px;margin-bottom:10px;">指名中</span>
   <div class="retry-notice" id="retry-notice"></div>
   <div class="my-pick-display" id="pick-my-pick">候補を選んで「確定」を押してください</div>
   <div class="history-box" id="pick-history"></div>
