@@ -533,8 +533,10 @@
         const env=group.envelopes[i];
         const takenBy=Object.entries(chosen).find(([,v])=>Number(v)===i);
         const playerName=takenBy?esc(pl[takenBy[0]]?.name||'?'):'?';
-        html+='<div class="envelope revealed '+(env.isWinner?'winner':'loser')+'">'
-          +'<div class="env-icon">'+(env.isWinner?'🎉':'💨')+'</div>'
+        // 当たり判定：この封筒を選んだ人が winner かどうか
+        const isWon=takenBy&&takenBy[0]===group.winner;
+        html+='<div class="envelope revealed '+(isWon?'winner':'loser')+'">'
+          +'<div class="env-icon">'+(isWon?'🎉':'💨')+'</div>'
           +'<div class="env-label">'+playerName+'</div></div>';
       }
       html+='</div><div class="lp-winner-announce">🏆 '+esc(pl[group.winner]?.name||'?')+' が「'+esc(group.candidate)+'」を獲得！</div>';
