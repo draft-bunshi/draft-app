@@ -127,6 +127,7 @@
   }
 
   window.startGame=async function(){
+    if(!isHost)return;
     const pl=roomData.players||{};
     if(!Object.keys(pl).length){alert('参加者が必要です。');return;}
     const order=Object.keys(pl).sort((a,b)=>pl[a].joinedAt-pl[b].joinedAt);
@@ -290,18 +291,32 @@
   }
 
   window.startRevealAuto=async function(){
+    if(!isHost)return;
     const isRetry=!!(roomData.retryPlayers&&roomData.retryPlayers.length>0);
     if(isRetry)await startRevealForRetry();
     else await window.startReveal();
   };
 
   window.startReveal=async function(){
+    if(!isHost)return;
     const order=roomData.playerOrder||[];
-    const queue=order.map(pid=>({pid,isRetry:false}));
+    const round=roomData.currentRound||1;
+    const picks=(roomData.picks||{})[round]||{};
+    const prevResults=roomData.results||{};
+    // 選択終了済みの人は初回（まだresultsにない）のみキューに入れる
+    const queue=order.filter(pid=>{
+      const pick=picks[pid];
+      if(pick!==DONE_PICK)return true;
+      // 過去の巡でDONE_PICKがresultsに記録済みなら表示しない
+      const alreadyDone=Object.entries(prevResults).some(([r,rr])=>
+        parseInt(r)<round && rr[pid]&&rr[pid].candidate===DONE_PICK);
+      return !alreadyDone;
+    }).map(pid=>({pid,isRetry:false}));
     await update(getRoomRef(),{phase:'revealing',revealQueue:queue,revealQueueIndex:0,revealSubStep:0,revealShown:{}});
   };
 
   async function startRevealForRetry(){
+    if(!isHost)return;
     const retryPlayers=roomData.retryPlayers||[];
     if(!retryPlayers.length)return;
     const queue=retryPlayers.map(pid=>({pid,isRetry:true}));
@@ -339,7 +354,7 @@
     const {pid}=queue[qIdx];
     const p=pl[pid];
     const rawPick=picks[pid];
-    const pick=rawPick===DONE_PICK?'選択終了':(rawPick||'（指名なし）');
+    const pick=rawPick===DONE_PICK?'選択終了':(rawPick||'選択終了');
     const isRetryReveal=queue[0]?.isRetry||false;
 
     if(subStep===0){
@@ -393,7 +408,7 @@
           }
         }
         let pick2='—';
-        if(isRevealed) pick2=rawP===DONE_PICK?'選択終了':(rawP||'（指名なし）');
+        if(isRevealed) pick2=rawP===DONE_PICK?'選択終了':(rawP||'選択終了');
         else if(isPlayerDone(pid2)) pick2='選択終了済';
         // 競合フラグ
         const isConflict=isRetryReveal&&isRevealed&&rawP&&conflictCands.has(rawP);
@@ -408,9 +423,11 @@
   }
 
   window.revealShowPick=async function(){
+    if(!isHost)return;
     await update(getRoomRef(),{['revealShown/'+String(roomData.revealQueueIndex||0)]:true});
   };
   window.nextReveal=async function(){
+    if(!isHost)return;
     const sub=roomData.revealSubStep||0;
     if(sub===0) await update(getRoomRef(),{revealSubStep:1});
     else await update(getRoomRef(),{revealQueueIndex:(roomData.revealQueueIndex||0)+1,revealSubStep:0});
@@ -418,6 +435,7 @@
 
   // ===== 競合チェック =====
   window.judgeRound=async function(){
+    if(!isHost)return;
     const round=roomData.currentRound;
     const picks=(roomData.picks||{})[round]||{};
     const retryPlayers=roomData.retryPlayers||null;
@@ -516,6 +534,7 @@
   }
 
   window.roundSummaryNext=async function(){
+    if(!isHost)return;
     const round=roomData.roundSummaryRound||roomData.currentRound;
     const next=round+1;
     await update(getRoomRef(),{phase:'picking',currentRound:next,retryPlayers:null,
@@ -609,10 +628,11 @@
     document.getElementById('lp-next-btn').style.display=isHost?'block':'none';
   }
 
-  window.revealEnvelopes=async function(){await update(getRoomRef(),{lotteryRevealed:true});};
+  window.revealEnvelopes=async function(){if(!isHost)return;await update(getRoomRef(),{lotteryRevealed:true});};
 
   // くじ引き結果後 → 外れた人を再指名（picking）へ直接移行
   window.lotteryPickNext=async function(){
+    if(!isHost)return;
     const round=roomData.currentRound;
     const groups=roomData.lotteryGroups||[];
     const donePlayers=roomData.donePlayers||[];
